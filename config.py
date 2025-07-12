@@ -1,6 +1,5 @@
 # config.py
 
-
 # --- 环境配置 ---
 IMG_WIDTH = 512  # 缩小后的图像宽度
 IMG_HEIGHT = 288  # 缩小后的图像高度

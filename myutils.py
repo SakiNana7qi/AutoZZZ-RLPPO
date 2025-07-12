@@ -1,4 +1,4 @@
-# myytils.py
+# myutils.py
 
 import ctypes
 import win32gui
