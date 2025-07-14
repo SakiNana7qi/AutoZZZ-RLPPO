@@ -21,7 +21,6 @@ MOUSE_ESC_TO_RESTART_WIDTH = 425  # 重开鼠标移动相对距离
 MOUSE_ESC_TO_RESTART_HEIGHT = 480
 MOUSE_RESTART_TO_CONFIRM_WIDTH = -280
 MOUSE_RESTART_TO_CONFIRM_HEIGHT = -418
-CHAIN_ATK_STICKER_COORD = [618, 878, 682, 20]
 
 # --- Reward ---
 BOSS_DMG_REWARD_SCALE = 0.03  # 对 boss 造成伤害的奖励系数
@@ -50,3 +49,10 @@ PPO_EPOCHS = 10  # 每次更新时，对数据进行优化的轮数
 BATCH_SIZE = 64  # 每轮优化中的 batch_size
 VF_COEF = 0.5  # 价值函数损失的系数
 ENT_COEF = 0.1  # 熵奖励的系数
+
+# --- YOLO 参数 ---
+conf_threshold = 0.45  # 置信度
+ESC_COORD = [1650, 67, 203, 59]
+CLOCK_COORD = [1690, 43, 150, 150]
+Q_COORD = [1736, 787, 83, 83]
+CHAINATK_COORD = [606, 871, 708, 159]

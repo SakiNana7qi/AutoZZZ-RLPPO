@@ -83,7 +83,7 @@ def main():
                     env.hp_boss = env._calculate_boss_hp()
                     env.hp_agents = env._calculate_agents_hp()
 
-                    if not env._is_break():
+                    if env.game_state() != "break":
                         print("检测到暂停已结束。")
                         recovered_state = env.recover_from_pause()  # 调用恢复函数
                         if recovered_state is None:

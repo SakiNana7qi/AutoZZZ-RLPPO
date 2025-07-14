@@ -2,6 +2,7 @@
 
 import ctypes
 import win32gui
+import time
 
 
 def get_dpi_scale_factor(hwnd: int) -> float:
@@ -57,6 +58,7 @@ def select_target_window() -> int | None:
             return None
         choice = int(choice_str)
         if 0 <= choice < len(windows):
+            time.sleep(1)
             return windows[choice][0]
     except (ValueError, IndexError):
         pass

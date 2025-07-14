@@ -14,6 +14,7 @@ import time
 import random
 from scipy import stats
 import os
+from yolo_detection import detect_image
 
 eps = 1e-6
 
@@ -59,6 +60,7 @@ class ZZZEnv(gym.Env):
         print(
             f"已选择窗口句柄: {self.hwnd}, Title: '{win32gui.GetWindowText(self.hwnd)}'"
         )
+
         self.sct = mss.mss()  # 截图要用的
 
         self.key_manager = KeyManager()  # 创建非阻塞键盘管理器
@@ -124,7 +126,7 @@ class ZZZEnv(gym.Env):
         self.hp_agents = self._calculate_agents_hp()
 
         # 检查是否处于非正常状态（血条不对劲了）
-        if self._is_break():
+        if self.game_state() == "break":
             print("检测到暂停状态 (is_break)，将暂停训练...")
             # 返回当前观察值，奖励为 0 ，done 为 False，***在 info 中返回一个暂停信号***
             info = {"is_paused": True}
@@ -302,55 +304,47 @@ class ZZZEnv(gym.Env):
             result_hp = 0.0
         return result_hp
 
-    def _is_break(self):
-        """出现异常状况，暂停权重更新"""
-        # 避免在战斗刚开始或结束时误判
-        if self._is_terminated():
+    def _is_esc(self):
+        if self.img is None or self.img.size == 0:
             return False
-        if np.max(self.hp_agents) < eps and self.hp_boss < eps:
-            time.sleep(0.1)
-            self.flush()
-            if np.max(self.hp_agents) < eps and self.hp_boss < eps:
-                if not self._is_chain_attack():
-                    return True
-                print("进入连携技")
-                time.sleep(0.5)
-                for count in range(3):
-                    self.key_manager.update()
-                    self.key_manager.do_action(7, 0.05)
-                    self.key_manager.update()
-                    time.sleep(0.1)
-                    self.key_manager.update()
-
-                    flag = False
-                    chain_time = time.time()
-                    while time.time() - chain_time < 1.0:
-                        self.flush()
-                        if (
-                            np.max(self.hp_agents) < eps
-                            and self.hp_boss < eps
-                            and self._is_chain_attack()
-                        ):
-                            flag = True
-                            break
-                        time.sleep(0.05)
-                    if not flag:
-                        print("没有连携")
-                        return False
-                    print(f"连携技 {count}")
-
-                    while np.max(self.hp_agents) < eps and self.hp_boss < eps:
-                        self.flush()
-                        time.sleep(0.05)
-
-                self.flush()
-                self.key_manager.release_all()
-                print("连携技完成")
-                return False
-            else:
-                return True
-        else:
+        x, y, w, h = config.ESC_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
             return False
+        name, score = detect_image(roi)
+        return name == "settings"
+
+    def _is_terminated(self):
+        if self._is_victory() or self._is_defeat():  # 先只关心一阶段
+            # if self._is_controllable():
+            #     if self._is_victory():
+            #         return True
+            #     return False
+            return True
+        return False
+
+    def _is_controllable(self):  # 有闹钟说明在正常战斗界面：
+        if self.img is None or self.img.size == 0:
+            return False
+        x, y, w, h = config.CLOCK_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
+            return False
+        name, score = detect_image(roi)
+        # print(f"controllable {name} {score:.2f}")
+        return name == "clock"
+
+    def _is_chain_attack(self):
+        """是否在连携技"""
+        if self.img is None or self.img.size == 0:
+            return False
+        x, y, w, h = config.CHAINATK_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
+            return False
+        name, score = detect_image(roi)
+        # print(f"chainatk {name} {score:.2f}")
+        return name == "chainatk"
 
     def _is_victory(self):
         if np.min(self.hp_agents) > eps and self.hp_boss < eps:
@@ -362,40 +356,27 @@ class ZZZEnv(gym.Env):
             return True
         return False
 
-    def _is_terminated(self):
-        if self._is_victory() or self._is_defeat():
+    def game_state(self):
+        if self._is_controllable():
+            return "running"
+        if self._is_esc():
+            return "break"
+        if self._is_chain_attack():
+            print("进入连携技")
             self.key_manager.update()
-            self.key_manager.do_action(7, 0.01)
+            self.key_manager.do_action(7, 0.05)
+            self.key_manager.update()
             time.sleep(0.1)
             self.key_manager.update()
-            self.flush()
-            if self._is_victory() or self._is_defeat():
-                return True
-            return False
-        else:
-            return False
-
-    def _is_chain_attack(self):
-        """是否在连携技"""
-        if self.img is None or self.img.size == 0:
-            return False
-
-        x, y, w, h = config.CHAIN_ATK_STICKER_COORD
-        roi = self.img[y : y + h, x : x + w]
-
-        if roi.size == 0:
-            return 0
-
-        red_channel = roi[:, :, 2]
-        mask = red_channel > 150
-
-        row_sums = np.sum(mask, axis=1)
-
-        if row_sums.size == 0:
-            return 0
-        if np.mean(row_sums) > 300:
-            return True
-        return False
+            self.key_manager.release_all()
+            print("连携技完成")
+            return "running"
+        # if self._is_victory() or self._is_defeat():
+        # return "terminated"
+        # if np.max(self.hp_agents) < eps and self.hp_boss < eps:
+        # return "running"
+        print("开大了")
+        return "break"
 
     def _calculate_reward(self):
         boss_hp_diff = self.hp_boss - self.last_hp_boss
@@ -440,7 +421,7 @@ class ZZZEnv(gym.Env):
         print("开始进入关卡")
         start_time = time.time()
         idx = 0
-        while time.time() - start_time < 7.2:
+        while time.time() - start_time < 6.5:
             from directkeys import _1, _2, _3, F, U
 
             if idx == 0 and time.time() - start_time > 0.5:
