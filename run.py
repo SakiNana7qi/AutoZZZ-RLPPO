@@ -51,7 +51,8 @@ def main():
     episode_num = 0
 
     while total_timesteps < config.MAX_TIMESTEPS:
-        state, _ = env.reset()
+        state, info = env.reset()
+        action_mask = info.get("action_mask", np.ones(config.N_ACTIONS, dtype=np.bool_))
         if state is None:
             print("环境重置失败，退出训练。")
             break
@@ -63,9 +64,13 @@ def main():
         # --- Episode Loop ---
         while not done:
             episode_time = time.time()
-            action, log_prob, value = agent.select_action(state)
+            action, log_prob, value = agent.select_action(state, action_mask)
 
             next_state, reward, terminated, truncated, info = env.step(action)
+
+            next_action_mask = info.get(
+                "action_mask", np.ones(config.N_ACTIONS, dtype=np.bool_)
+            )
 
             # 暂停处理
             if info.get("is_paused", False):
@@ -91,6 +96,7 @@ def main():
                             terminated = True
                         else:
                             state = recovered_state  # 覆盖当前状态
+                            action_mask = env._get_action_mask()
                         break
 
                 # 如果因为一些原因终止，则进入下一个 episode
@@ -104,14 +110,17 @@ def main():
             done = terminated or truncated
 
             # 存储
-            agent.store_transition(state, action, log_prob, reward, done, value)
+            agent.store_transition(
+                state, action, log_prob, reward, done, value, action_mask
+            )
 
             state = next_state
+            action_mask = next_action_mask
             episode_reward += reward
             episode_len += 1
             total_timesteps += 1
             print(
-                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | action {action:2d} | reward {reward:.6f}"
+                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | action {action:2d} | reward {reward:.6f} | mask {env._get_action_mask()}"
             )
 
             if len(agent.memory["states"]) >= config.UPDATE_INTERVAL:

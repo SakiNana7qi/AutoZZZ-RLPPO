@@ -9,13 +9,13 @@ import config
 
 from torchvision.ops import nms
 
-model_path = "runs/detect/whole_image_detection2/weights/best.onnx"
+model_path = "runs/detect/whole_image_detection3/weights/best.onnx"
 session = ort.InferenceSession(
     model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
 )
 input_name = session.get_inputs()[0].name
 output_names = [output.name for output in session.get_outputs()]
-class_map_file = "./yolopng/ZZZUI.v2i.yolov8-obb/class_map.txt"
+class_map_file = "./yolopng/ZZZUI.v3i.yolov8-obb/class_map.txt"
 try:
     with open(class_map_file, "r", encoding="utf-8") as f:
         MY_CLASS_NAMES = [line.strip() for line in f.readlines()]

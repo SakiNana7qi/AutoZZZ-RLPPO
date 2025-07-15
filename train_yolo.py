@@ -10,19 +10,25 @@ if __name__ == "__main__":
 
     # train
     train_results = model.train(
-        data="./yolopng/ZZZUI.v2i.yolov8-obb/data.yaml",  # 配置文件
+        data="./yolopng/ZZZUI.v3i.yolov8-obb/data.yaml",  # 配置文件
         epochs=512,
         batch=64,
         imgsz=640,
         device=device,
         workers=0,  # win 上设为 0 避免多进程问题
-        name="whole_image_detection",
+        name="whole_image_detection3",
     )
 
     """
     EarlyStopping: Training stopped early as no improvement observed in last 100 epochs. Best results observed at epoch 9, best model saved as best.pt.
     To update EarlyStopping(patience=100) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
     绷不住了
+
+    v3:
+    EarlyStopping: Training stopped early as no improvement observed in last 100 epochs. Best results observed at epoch 4, best model saved as best.pt.
+    To update EarlyStopping(patience=100) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
+
+    更难绷
     """
 
     # 评估模型

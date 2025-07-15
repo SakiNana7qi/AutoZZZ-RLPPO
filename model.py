@@ -40,13 +40,17 @@ class ActorCritic(nn.Module):
         o = self.conv(shape)
         return int(np.prod(o.size()))
 
-    def forward(self, x):
+    def forward(self, x, action_mask=None):
         # gym 爷爷说过，输入的 x 一定要是 [batch, height, width, channels]
         # 但是我们的 pytorch 宝宝要的是 [batch, channels, height, width]
         # 但我们已经在 agent 和 run.py 转好了
         conv_out = self.conv(x).reshape(x.size(0), -1)  # 展平
 
         action_logits = self.actor(conv_out)
+
+        if action_mask is not None:
+            action_logits[~action_mask] = -1e8  # 将无效动作的 logits 设置为 -inf
+
         action_dist = Categorical(logits=action_logits)
 
         value = self.critic(conv_out)

@@ -43,32 +43,39 @@ class PPOAgent:
             "rewards": [],
             "dones": [],
             "values": [],
+            "action_masks": [],
         }
 
     def _clear_memory(self):
         for key in self.memory:
             self.memory[key].clear()
 
-    def store_transition(self, state, action, log_prob, reward, done, value):
+    def store_transition(
+        self, state, action, log_prob, reward, done, value, action_mask
+    ):
         self.memory["states"].append(torch.tensor(state, dtype=torch.bfloat16))
         self.memory["actions"].append(torch.tensor(action, dtype=torch.int64))
         self.memory["log_probs"].append(log_prob)
         self.memory["rewards"].append(torch.tensor(reward, dtype=torch.bfloat16))
         self.memory["dones"].append(torch.tensor(done, dtype=torch.bfloat16))
         self.memory["values"].append(value)
+        self.memory["action_masks"].append(torch.tensor(action_mask, dtype=torch.bool))
 
-    def select_action(self, state):
-        # 将 numpy state 转换为 torch tensor
-
+    def select_action(self, state, action_mask):
         state_tensor = (
             torch.tensor(state, dtype=torch.bfloat16)
             .permute(2, 0, 1)
             .unsqueeze(0)
             .to(self.device)
         )  # [H, W, C] -> [C, H, W] -> [1, C, H, W]
+        # 将 numpy state 转换为 torch tensor
+
+        action_mask_tensor = (
+            torch.tensor(action_mask, dtype=torch.bool).unsqueeze(0).to(self.device)
+        )
 
         with torch.no_grad():
-            dist, value = self.model(state_tensor)
+            dist, value = self.model(state_tensor, action_mask_tensor)
 
         action = dist.sample()  # 采样一个动作
         log_prob = dist.log_prob(action)
@@ -76,13 +83,13 @@ class PPOAgent:
         return action.item(), log_prob.cpu(), value.cpu()
 
     def learn(self):
-        # 从内存中读取数据
-        states = torch.stack(self.memory["states"]).to(self.device)
+        states = torch.stack(self.memory["states"]).to(self.device)  # 从内存中读取数据
         actions = torch.stack(self.memory["actions"]).to(self.device)
         old_log_probs = torch.stack(self.memory["log_probs"]).to(self.device)
         rewards = self.memory["rewards"]
         dones = self.memory["dones"]
         values = torch.stack(self.memory["values"]).squeeze().to(self.device)
+        action_masks = torch.stack(self.memory["action_masks"]).to(self.device)
 
         # 用 GAE 计算 Advantage 和 Returns
         advantages = torch.zeros(len(rewards), dtype=torch.bfloat16).to(self.device)
@@ -130,9 +137,10 @@ class PPOAgent:
                 batch_old_log_probs = old_log_probs[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_returns = returns[batch_indices]
+                batch_action_masks = action_masks[batch_indices]
 
                 # 用旧的 states 来算新的动作分布和价值
-                new_dist, new_values = self.model(batch_states)
+                new_dist, new_values = self.model(batch_states, batch_action_masks)
                 new_values = new_values.squeeze()
 
                 # r = exp(new_log_prob - old_log_prob)

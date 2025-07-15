@@ -106,7 +106,7 @@ class ZZZEnv(gym.Env):
             f"初始化完成。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
 
-        info = {}
+        info = {"action_mask": self._get_action_mask()}
         return current_obs, info
 
     def step(self, action):
@@ -145,7 +145,9 @@ class ZZZEnv(gym.Env):
             self.consecutive_action_count = 1
             self.last_action = action
 
+        """
         # 如果连续次数超过了一个阈值，才开始施加连续用同一个动作的惩罚
+        # upd250715 感觉现在这个没啥用，先注释了
         if self.consecutive_action_count > config.REPETITION_THRESHOLD:
             penalty_factor = (
                 self.consecutive_action_count - config.REPETITION_THRESHOLD
@@ -154,6 +156,7 @@ class ZZZEnv(gym.Env):
 
         if action:
             reward -= repetition_penalty
+        """
 
         # 判断是否结束
         terminated = self._is_terminated()
@@ -164,6 +167,7 @@ class ZZZEnv(gym.Env):
             "repetition_penalty": repetition_penalty,
             "consecutive_actions": self.consecutive_action_count,
             "current_action": action,
+            "action_mask": self._get_action_mask(),
         }
         # TODO:
         # truncated 是时间到了而不是结束 terminated 了，可能在有利局面下结束
@@ -346,13 +350,27 @@ class ZZZEnv(gym.Env):
         # print(f"chainatk {name} {score:.2f}")
         return name == "chainatk"
 
+    def _is_qable(self):
+        """是否在连携技"""
+        if self.img is None or self.img.size == 0:
+            return False
+        x, y, w, h = config.Q_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
+            return False
+        name, score = detect_image(roi)
+        # print(f"chainatk {name} {score:.2f}")
+        return name == "qable"
+
     def _is_victory(self):
         if np.min(self.hp_agents) > eps and self.hp_boss < eps:
+            print("赢了")
             return True
         return False
 
     def _is_defeat(self):
         if np.min(self.hp_agents) < eps and self.hp_boss > eps:
+            print("似了")
             return True
         return False
 
@@ -377,6 +395,44 @@ class ZZZEnv(gym.Env):
         # return "running"
         print("开大了")
         return "break"
+
+    def _is_switch_able(self):
+        """切人能不能用"""
+        if self.img is None or self.img.size == 0:
+            return False
+        x, y, w, h = config.SWITCH_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
+            return False
+        name, score = detect_image(roi)
+        return not (name == "switchdisable")
+
+    def _is_dodge_able(self):
+        """闪避能不能用"""
+        if self.img is None or self.img.size == 0:
+            return False
+        x, y, w, h = config.DODGE_COORD
+        roi = self.img[y : y + h, x : x + w]
+        if roi.size == 0:
+            return False
+        name, score = detect_image(roi)
+        return name == "dodgeable"
+
+    def _get_action_mask(self):
+        """
+        表示哪些动作是可用的，one-hot 编码，1可用，0不可用
+        """
+        mask = np.ones(config.N_ACTIONS, dtype=np.bool_)
+
+        mask[0] = True
+        mask[1] = True
+        mask[2] = self._is_dodge_able()
+        mask[3] = True
+
+        mask[4] = self._is_qable()
+        mask[5] = mask[6] = self._is_switch_able()
+
+        return mask
 
     def _calculate_reward(self):
         boss_hp_diff = self.hp_boss - self.last_hp_boss

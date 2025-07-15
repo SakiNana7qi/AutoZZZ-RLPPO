@@ -24,7 +24,7 @@ MOUSE_RESTART_TO_CONFIRM_HEIGHT = -418
 
 # --- Reward ---
 BOSS_DMG_REWARD_SCALE = 0.03  # 对 boss 造成伤害的奖励系数
-AGENT_DMG_PENALTY_SCALE = 0.05  # 代理人受到伤害的惩罚系数
+AGENT_DMG_PENALTY_SCALE = 0.1  # 代理人受到伤害的惩罚系数
 TIME_PENALTY = 0.001  # 每一步的时间惩罚
 VICTORY_REWARD = 10.0  # 胜利大奖励
 DEFEAT_PENALTY = -10.0  # 失败大惩罚
@@ -37,11 +37,11 @@ REPETITION_PENALTY_SCALE = 0.001  # 惩罚系数
 
 # --- PPO 训练配置 ---
 MAX_TIMESTEPS = 1000000  # 总训练步数
-UPDATE_INTERVAL = 2048  # 每收集多少步数据后进行一次更新
+UPDATE_INTERVAL = 1024  # 每收集多少步数据后进行一次更新
 SAVE_INTERVAL = 10  # 每多少个 episode 保存一次模型
 
 # --- PPO 算法超参数 ---
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1.5e-4
 GAMMA = 0.99  # γ
 GAE_LAMBDA = 0.95  # GAE 参数
 POLICY_CLIP = 0.2  # PPO 裁剪范围
@@ -52,7 +52,9 @@ ENT_COEF = 0.1  # 熵奖励的系数
 
 # --- YOLO 参数 ---
 conf_threshold = 0.45  # 置信度
-ESC_COORD = [1650, 67, 203, 59]
-CLOCK_COORD = [1690, 43, 150, 150]
-Q_COORD = [1736, 787, 83, 83]
-CHAINATK_COORD = [606, 871, 708, 159]
+ESC_COORD = [1650, 67, 203, 59]  # ESC 界面 “设置” 区域
+CLOCK_COORD = [1690, 43, 150, 150]  # 计时器区域
+Q_COORD = [1736, 787, 83, 83]  # 终结技区域
+CHAINATK_COORD = [606, 871, 708, 159]  # 连携技区域
+SWITCH_COORD = [1737, 929, 183, 126]  # 切人区域
+DODGE_COORD = [1522, 923, 84, 133]  # 闪避区域
