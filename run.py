@@ -28,7 +28,11 @@ def main():
 
     env = ZZZEnv()
 
-    model = ActorCritic(input_channels=3, num_actions=config.N_ACTIONS)
+    model = ActorCritic(
+        input_channels=3,
+        num_actions=config.N_ACTIONS,
+        action_history_len=config.ACTION_HISTORY_LEN,
+    )
     model.to(device=device, dtype=torch.bfloat16)
 
     agent = PPOAgent(
@@ -120,10 +124,10 @@ def main():
             episode_len += 1
             total_timesteps += 1
             print(
-                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | action {action:2d} | reward {reward:.6f} | mask {env._get_action_mask()}"
+                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | action {action:2d} | reward {reward:8.6f} | mask {env._get_action_mask()}"
             )
 
-            if len(agent.memory["states"]) >= config.UPDATE_INTERVAL:
+            if len(agent.memory["image_states"]) >= config.UPDATE_INTERVAL:
                 print(f"达到更新步数 {config.UPDATE_INTERVAL}，开始学习...")
                 from directkeys import ESC
 

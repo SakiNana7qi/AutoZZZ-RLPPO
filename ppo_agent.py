@@ -37,7 +37,8 @@ class PPOAgent:
 
         # 内存（存要学的东西）
         self.memory = {
-            "states": [],
+            "image_states": [],
+            "action_history_states": [],
             "actions": [],
             "log_probs": [],
             "rewards": [],
@@ -53,7 +54,12 @@ class PPOAgent:
     def store_transition(
         self, state, action, log_prob, reward, done, value, action_mask
     ):
-        self.memory["states"].append(torch.tensor(state, dtype=torch.bfloat16))
+        self.memory["image_states"].append(
+            torch.tensor(state["image"], dtype=torch.bfloat16)
+        )
+        self.memory["action_history_states"].append(
+            torch.tensor(state["action_history"], dtype=torch.int64)
+        )
         self.memory["actions"].append(torch.tensor(action, dtype=torch.int64))
         self.memory["log_probs"].append(log_prob)
         self.memory["rewards"].append(torch.tensor(reward, dtype=torch.bfloat16))
@@ -62,20 +68,27 @@ class PPOAgent:
         self.memory["action_masks"].append(torch.tensor(action_mask, dtype=torch.bool))
 
     def select_action(self, state, action_mask):
-        state_tensor = (
-            torch.tensor(state, dtype=torch.bfloat16)
+        image_tensor = (
+            torch.tensor(state["image"], dtype=torch.bfloat16)
             .permute(2, 0, 1)
             .unsqueeze(0)
             .to(self.device)
         )  # [H, W, C] -> [C, H, W] -> [1, C, H, W]
         # 将 numpy state 转换为 torch tensor
+        action_history_tensor = (
+            torch.tensor(state["action_history"], dtype=torch.int64)
+            .unsqueeze(0)
+            .to(self.device)
+        )
 
         action_mask_tensor = (
             torch.tensor(action_mask, dtype=torch.bool).unsqueeze(0).to(self.device)
         )
 
         with torch.no_grad():
-            dist, value = self.model(state_tensor, action_mask_tensor)
+            dist, value = self.model(
+                image_tensor, action_history_tensor, action_mask_tensor
+            )
 
         action = dist.sample()  # 采样一个动作
         log_prob = dist.log_prob(action)
@@ -83,7 +96,12 @@ class PPOAgent:
         return action.item(), log_prob.cpu(), value.cpu()
 
     def learn(self):
-        states = torch.stack(self.memory["states"]).to(self.device)  # 从内存中读取数据
+        image_states = torch.stack(self.memory["image_states"]).to(
+            self.device
+        )  # 从内存中读取数据
+        action_history_states = torch.stack(self.memory["action_history_states"]).to(
+            self.device
+        )
         actions = torch.stack(self.memory["actions"]).to(self.device)
         old_log_probs = torch.stack(self.memory["log_probs"]).to(self.device)
         rewards = self.memory["rewards"]
@@ -112,9 +130,9 @@ class PPOAgent:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # epochjs
-        states = states.permute(0, 3, 1, 2)  # [N, H, W, C] -> [N, C, H, W]
+        image_states = image_states.permute(0, 3, 1, 2)  # [N, H, W, C] -> [N, C, H, W]
 
-        num_samples = len(states)
+        num_samples = len(image_states)
         indices = np.arange(num_samples)
 
         # losses
@@ -132,7 +150,8 @@ class PPOAgent:
                 batch_indices = indices[start:end]
 
                 # 获取批数据
-                batch_states = states[batch_indices]
+                batch_image_states = image_states[batch_indices]
+                batch_action_history_states = action_history_states[batch_indices]
                 batch_actions = actions[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
                 batch_advantages = advantages[batch_indices]
@@ -140,7 +159,9 @@ class PPOAgent:
                 batch_action_masks = action_masks[batch_indices]
 
                 # 用旧的 states 来算新的动作分布和价值
-                new_dist, new_values = self.model(batch_states, batch_action_masks)
+                new_dist, new_values = self.model(
+                    batch_image_states, batch_action_history_states, batch_action_masks
+                )
                 new_values = new_values.squeeze()
 
                 # r = exp(new_log_prob - old_log_prob)

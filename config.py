@@ -4,6 +4,7 @@
 IMG_WIDTH = 512  # 缩小后的图像宽度
 IMG_HEIGHT = 288  # 缩小后的图像高度
 N_ACTIONS = 7  # 动作空间大小 WASD10111213 连携上下取消789
+ACTION_HISTORY_LEN = 8  # 历史动作记录长度
 
 # --- 游戏交互配置 ---
 BATTLE_START_WAIT_TIME = 0.1  # (秒) reset后等待战斗稳定的时间
@@ -21,9 +22,10 @@ MOUSE_ESC_TO_RESTART_WIDTH = 425  # 重开鼠标移动相对距离
 MOUSE_ESC_TO_RESTART_HEIGHT = 480
 MOUSE_RESTART_TO_CONFIRM_WIDTH = -280
 MOUSE_RESTART_TO_CONFIRM_HEIGHT = -418
+TERMINATED_COUNT = 3  # 胜利/死亡判定次数
 
 # --- Reward ---
-BOSS_DMG_REWARD_SCALE = 0.03  # 对 boss 造成伤害的奖励系数
+BOSS_DMG_REWARD_SCALE = 0.1  # 对 boss 造成伤害的奖励系数
 AGENT_DMG_PENALTY_SCALE = 0.1  # 代理人受到伤害的惩罚系数
 TIME_PENALTY = 0.001  # 每一步的时间惩罚
 VICTORY_REWARD = 10.0  # 胜利大奖励

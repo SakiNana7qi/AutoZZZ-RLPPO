@@ -15,6 +15,7 @@ import random
 from scipy import stats
 import os
 from yolo_detection import detect_image
+import collections
 
 eps = 1e-6
 
@@ -74,6 +75,18 @@ class ZZZEnv(gym.Env):
         self.consecutive_action_count = 0  # 连续相同的动作次数
         self.last_action = -1  # 初始化为 -1
 
+        # 动作历史队列，长度为N
+        self.action_history = collections.deque(maxlen=config.ACTION_HISTORY_LEN)
+        for _ in range(config.ACTION_HISTORY_LEN):
+            self.action_history.append(-1)
+
+    def _get_current_state(self):
+        """将图像和动作历史打包成一个字典作为状态"""
+        return {
+            "image": self._get_observation(),
+            "action_history": np.array(self.action_history, dtype=np.int32),
+        }
+
     def reset(self, seed=None):
         super().reset(seed=seed)
         print("开始新一轮战斗...")
@@ -106,8 +119,11 @@ class ZZZEnv(gym.Env):
             f"初始化完成。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
 
+        for _ in range(config.ACTION_HISTORY_LEN):
+            self.action_history.append(-1)
+
         info = {"action_mask": self._get_action_mask()}
-        return current_obs, info
+        return self._get_current_state(), info
 
     def step(self, action):
         """执行动作"""
@@ -116,9 +132,11 @@ class ZZZEnv(gym.Env):
         time.sleep(0.002)
         self.key_manager.update()
 
+        self.action_history.append(action)
+
         # 获取新状态
         # time.sleep(config.ACTION_DELAY)
-        next_observation = self._get_observation()
+        next_state = self._get_current_state()
 
         self.last_hp_boss = self.hp_boss
         self.last_hp_agents = np.copy(self.hp_agents)
@@ -130,7 +148,7 @@ class ZZZEnv(gym.Env):
             print("检测到暂停状态 (is_break)，将暂停训练...")
             # 返回当前观察值，奖励为 0 ，done 为 False，***在 info 中返回一个暂停信号***
             info = {"is_paused": True}
-            return next_observation, 0.0, False, False, info
+            return next_state, 0.0, False, False, info
 
         # 计算奖励
         reward = self._calculate_reward()
@@ -172,7 +190,7 @@ class ZZZEnv(gym.Env):
         # TODO:
         # truncated 是时间到了而不是结束 terminated 了，可能在有利局面下结束
         # 所以如果 truncated 那还是要计算贡献的，只不过暂时不会遇到这种情况
-        return next_observation, reward, terminated, truncated, info
+        return next_state, reward, terminated, truncated, info
 
     def recover_from_pause(self):
         """
@@ -181,8 +199,8 @@ class ZZZEnv(gym.Env):
         print("从暂停中恢复，正在重新校准状态...")
         time.sleep(0.5)  # 等待画面稳定
 
-        current_obs = self._get_observation()
-        if current_obs is None:
+        current_state = self._get_current_state()
+        if current_state is None:
             print("恢复失败，无法获取画面。")
             return None
 
@@ -196,7 +214,7 @@ class ZZZEnv(gym.Env):
             f"状态已校准。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
 
-        return current_obs
+        return current_state
 
     def _get_observation(self):
         if not self.hwnd or not self.sct:
@@ -363,14 +381,28 @@ class ZZZEnv(gym.Env):
         return name == "qable"
 
     def _is_victory(self):
-        if np.min(self.hp_agents) > eps and self.hp_boss < eps:
-            print("赢了")
+        count = 0
+        while count < config.TERMINATED_COUNT and (
+            np.min(self.hp_agents) > eps and self.hp_boss < eps
+        ):
+            time.sleep(0.1)
+            self.flush()
+            count += 1
+            print(f"胜利判定次数 {count}")
+        if count == config.TERMINATED_COUNT:
             return True
         return False
 
     def _is_defeat(self):
-        if np.min(self.hp_agents) < eps and self.hp_boss > eps:
-            print("似了")
+        count = 0
+        while count < config.TERMINATED_COUNT and (
+            np.min(self.hp_agents) < eps and self.hp_boss > eps
+        ):
+            time.sleep(0.1)
+            self.flush()
+            count += 1
+            print(f"死亡判定次数 {count}")
+        if count == config.TERMINATED_COUNT:
             return True
         return False
 
