@@ -132,13 +132,13 @@ def renderer_process(pipe: Connection):
             status_color = (255, 0, 0)
             ui_state = latest_data.get("ui_state", None)
             if not ui_state == None:
-                if ui_state["is_controllable"]:
+                if ui_state.get("is_controllable", False):
                     status_str = "Running"
                     status_color = (255, 255, 0)
-                elif ui_state["is_esc"]:
+                elif ui_state.get("is_esc", False):
                     status_str = "ESC"
                     status_color = (255, 0, 0)
-                elif ui_state["is_chain_attack"]:
+                elif ui_state.get("is_chain_attack", False):
                     status_str = "连携技"
                     status_color = (255, 0, 0)
 

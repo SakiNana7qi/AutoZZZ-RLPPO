@@ -14,7 +14,7 @@ import time
 import random
 from scipy import stats
 import os
-from yolo_detection import detect_image
+from yolo_detection import detect_batch
 import collections
 import multiprocessing as mp
 from debug_renderer import renderer_process
@@ -85,7 +85,7 @@ class ZZZEnv(gym.Env):
         self.ui_pipe = None
         self.ui_process = None
 
-        self.ui_state = dict()
+        self.ui_state = {}
 
         self.victory_confirm_frames = 0
         self.defeat_confirm_frames = 0
@@ -354,16 +354,71 @@ class ZZZEnv(gym.Env):
             result_hp = 0.0
         return result_hp
 
-    def _is_esc(self):  # TODO : 这个 yolo 没识别出来（好像也不用 yolo），待修
+    def _detect_all_ui_elements(self):
+        """
+        更新 ui_state 的过程（没有返回值！！！）
+        """
         if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.ESC_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        # print(f"esc {name}")
-        return name == "settings"
+            self.ui_state = {}
+            return
+
+        rois = {
+            "esc": self.img[
+                config.ESC_COORD[1] : config.ESC_COORD[1] + config.ESC_COORD[3],
+                config.ESC_COORD[0] : config.ESC_COORD[0] + config.ESC_COORD[2],
+            ],
+            "clock": self.img[
+                config.CLOCK_COORD[1] : config.CLOCK_COORD[1] + config.CLOCK_COORD[3],
+                config.CLOCK_COORD[0] : config.CLOCK_COORD[0] + config.CLOCK_COORD[2],
+            ],
+            "q": self.img[
+                config.Q_COORD[1] : config.Q_COORD[1] + config.Q_COORD[3],
+                config.Q_COORD[0] : config.Q_COORD[0] + config.Q_COORD[2],
+            ],
+            "chain_attack": self.img[
+                config.CHAINATK_COORD[1] : config.CHAINATK_COORD[1]
+                + config.CHAINATK_COORD[3],
+                config.CHAINATK_COORD[0] : config.CHAINATK_COORD[0]
+                + config.CHAINATK_COORD[2],
+            ],
+            "switch": self.img[
+                config.SWITCH_COORD[1] : config.SWITCH_COORD[1]
+                + config.SWITCH_COORD[3],
+                config.SWITCH_COORD[0] : config.SWITCH_COORD[0]
+                + config.SWITCH_COORD[2],
+            ],
+            "dodge": self.img[
+                config.DODGE_COORD[1] : config.DODGE_COORD[1] + config.DODGE_COORD[3],
+                config.DODGE_COORD[0] : config.DODGE_COORD[0] + config.DODGE_COORD[2],
+            ],
+        }
+
+        roi_names_ordered = [name for name, roi in rois.items() if roi.size > 0]
+        roi_images_ordered = [roi for roi in rois.values() if roi.size > 0]
+
+        if not roi_names_ordered:
+            self.ui_state = {}
+            return
+
+        detection_results = detect_batch(roi_images_ordered)
+
+        detection_final_results = {}
+
+        for i, name in enumerate(roi_names_ordered):
+            class_name, score = detection_results[i]
+            detection_final_results[name] = class_name
+
+        self.ui_state["is_esc"] = detection_final_results["esc"] == "settings"
+        self.ui_state["is_controllable"] = detection_final_results["clock"] == "clock"
+        self.ui_state["is_chain_attack"] = (
+            detection_final_results["chain_attack"] == "chainatk"
+        )
+
+        self.ui_state["is_qable"] = detection_final_results["q"] == "qable"
+        self.ui_state["is_switch_able"] = not (
+            detection_final_results["switch"] == "switchdisable"
+        )
+        self.ui_state["is_dodge_able"] = detection_final_results["dodge"] == "dodgeable"
 
     def _is_terminated(self):
         is_victory_condition_met = self._is_victory()
@@ -393,61 +448,18 @@ class ZZZEnv(gym.Env):
             return True
         return False
 
-    def _is_controllable(self):  # 有闹钟说明在正常战斗界面：
-        if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.CLOCK_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        # print(f"controllable {name} {score:.2f}")
-        return name == "clock"
-
-    def _is_chain_attack(self):
-        """是否在连携技"""
-        if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.CHAINATK_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        # print(f"chainatk {name} {score:.2f}")
-        return name == "chainatk"
-
-    def _is_qable(self):
-        """是否在连携技"""
-        if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.Q_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        # print(f"chainatk {name} {score:.2f}")
-        return name == "qable"
-
     def _is_victory(self):
         return np.min(self.hp_agents) > eps and self.hp_boss < eps
 
     def _is_defeat(self):
         return np.min(self.hp_agents) < eps and self.hp_boss > eps
 
-    def _detect_all_ui_elements(self):
-        self.ui_state["is_controllable"] = self._is_controllable()
-        self.ui_state["is_qable"] = self._is_qable()
-        self.ui_state["is_switch_able"] = self._is_switch_able()
-        self.ui_state["is_dodge_able"] = self._is_dodge_able()
-        self.ui_state["is_esc"] = self._is_esc()
-        self.ui_state["is_chain_attack"] = self._is_chain_attack()
-
     def game_state(self):
-        if self.ui_state["is_controllable"]:
+        if self.ui_state.get("is_controllable", False):
             return "running"
-        if self.ui_state["is_esc"]:
+        if self.ui_state.get("is_esc", False):
             return "break"
-        if self.ui_state["is_chain_attack"]:
+        if self.ui_state.get("is_chain_attack", False):
             print("进入连携技")
             self.key_manager.update()
             self.key_manager.do_action(7, 0.05)
@@ -456,35 +468,15 @@ class ZZZEnv(gym.Env):
             self.key_manager.update()
             self.key_manager.release_all()
             print("连携技完成")
-            return "running"
+            return "break"
+        if self.defeat_confirm_frames > 0 or self.victory_confirm_frames > 0:  # 判定中
+            return "break"
         # if self._is_victory() or self._is_defeat():
         # return "terminated"
         # if np.max(self.hp_agents) < eps and self.hp_boss < eps:
         # return "running"
         print("开大了")
         return "break"
-
-    def _is_switch_able(self):
-        """切人能不能用"""
-        if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.SWITCH_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        return not (name == "switchdisable")
-
-    def _is_dodge_able(self):
-        """闪避能不能用"""
-        if self.img is None or self.img.size == 0:
-            return False
-        x, y, w, h = config.DODGE_COORD
-        roi = self.img[y : y + h, x : x + w]
-        if roi.size == 0:
-            return False
-        name, score = detect_image(roi)
-        return name == "dodgeable"
 
     def _get_action_mask(self):
         """
@@ -494,11 +486,11 @@ class ZZZEnv(gym.Env):
 
         mask[0] = True
         mask[1] = True
-        mask[2] = self.ui_state["is_dodge_able"]
+        mask[2] = self.ui_state.get("is_dodge_able", False)
         mask[3] = True
 
-        mask[4] = self.ui_state["is_qable"]
-        mask[5] = mask[6] = self.ui_state["is_switch_able"]
+        mask[4] = self.ui_state.get("is_qable", False)
+        mask[5] = mask[6] = self.ui_state.get("is_switch_able", False)
 
         return mask
 
@@ -522,8 +514,6 @@ class ZZZEnv(gym.Env):
         )
 
         reward = boss_damage_reward + agent_damage_penalty
-
-        print(f"bdag {boss_damage_reward:.4f} {agent_damage_penalty:.4f}")
 
         # 时间惩罚
         reward -= config.TIME_PENALTY

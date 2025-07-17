@@ -90,7 +90,7 @@ def main():
             if info.get("is_paused", False):
                 env.key_manager.release_all()
                 while True:
-                    time.sleep(0.5)
+                    time.sleep(0.1)
 
                     # 检查环境是否已恢复
                     temp_obs = env._get_observation()
@@ -136,7 +136,7 @@ def main():
             episode_len += 1
             total_timesteps += 1
             print(
-                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | action {action:2d} | reward {reward:8.6f} | mask {env._get_action_mask()}"
+                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | reward {reward:8.6f} | stepspeed: {1./(time.time()-episode_time):.1f}steps/s"
             )
 
             if len(agent.memory["image_states"]) >= config.UPDATE_INTERVAL:
@@ -160,12 +160,37 @@ def main():
 
                 env.key_manager.update()
                 time.sleep(0.1)
-                env.key_manager.press(ESC, 0.1)
+                env.key_manager.press(ESC, 0.02)
                 env.key_manager.update()
-                time.sleep(0.2)
-                env.key_manager.update()
+                time.sleep(0.1)
                 print("学习完成。")
+                env.key_manager.update()
                 env.key_manager.release_all()
+                while True:
+                    # 检查环境是否已恢复
+                    temp_obs = env._get_observation()
+                    env._detect_all_ui_elements()
+                    if temp_obs is None:  # 窗口关闭了
+                        print("暂停期间窗口关闭，终止本轮。")
+                        terminated = True
+                        break  # 跳出暂停循环
+
+                    env.hp_boss = env._calculate_boss_hp()
+                    env.hp_agents = env._calculate_agents_hp()
+
+                    if env.game_state() != "break":
+                        print("检测到暂停已结束。")
+                        recovered_state = env.recover_from_pause()  # 调用恢复函数
+                        if recovered_state is None:
+                            print("恢复失败，终止本轮。")
+                            terminated = True
+                        else:
+                            state = recovered_state  # 覆盖当前状态
+                            env._detect_all_ui_elements()
+                            action_mask = env._get_action_mask()
+                        break
+
+                    time.sleep(0.1)
 
             current_time = time.time()
             if current_time - episode_time < 0.02:

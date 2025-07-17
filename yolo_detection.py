@@ -38,9 +38,78 @@ settings # ESC 界面的设置
 """
 
 
+def preprocess_batch(images, imgsz=640):
+    """
+    对一个 batch 的图像进行打包预处理，image 为 [height, weight, bgr]
+    """
+    batch_tensors = []
+    for image in images:
+        img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        img_height, img_width = img.shape[:2]
+        scale = imgsz / max(img_height, img_width)
+        new_w, new_h = int(img_width * scale), int(img_height * scale)
+        resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+        input_tensor = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
+        pad_h = (imgsz - new_h) // 2
+        pad_w = (imgsz - new_w) // 2
+        input_tensor[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = resized_img
+
+        input_tensor = input_tensor.transpose(2, 0, 1)  # [h,w,c] -> [c,h,w]
+        input_tensor = input_tensor.astype(np.float32) / 255.0
+        batch_tensors.append(input_tensor)
+
+    return np.stack(batch_tensors, axis=0)  # 将单张图像张量堆叠成一个批次
+
+
+def postprocess_batch(detections, conf_threshold):
+    """
+    对 batch 的输出进行后处理
+    """
+    results = []
+
+    detections = detections.transpose(0, 2, 1)
+
+    # [batch_size, num_classes + 4, num_proposals] -> [batch_size, num_proposals, num_classes + 4]
+    for single_image_detection in detections:
+        scores_all_classes = single_image_detection[..., 4:]
+        scores = np.max(scores_all_classes, axis=-1)
+        class_ids = np.argmax(scores_all_classes, axis=-1)
+
+        mask = scores > conf_threshold
+        filtered_scores = scores[mask]
+        filtered_class_ids = class_ids[mask]
+
+        if len(filtered_class_ids) > 0:
+            idx = np.argmax(filtered_scores)
+            result_score = float(filtered_scores[idx])
+            result_class_name = MY_CLASS_NAMES[filtered_class_ids[idx]]
+            results.append((result_class_name, result_score))
+        else:
+            results.append(("NaC", -1.0))  # Not a Class
+
+    return results
+
+
+def detect_batch(images_to_detect, imgsz=640, conf_threshold=config.conf_threshold):
+    """
+    对 batch 进行 yolo 检测。
+    """
+    if not images_to_detect:
+        return []
+
+    input_batch = preprocess_batch(images_to_detect, imgsz)
+
+    detections_batch = session.run(output_names, {input_name: input_batch})[0]
+
+    results = postprocess_batch(detections_batch, conf_threshold)
+
+    return results
+
+
 def detect_image(image, imgsz=640):
     """
-    检测图是啥，image 为 [height, weight, bgr]
+    检测图是啥，单张。
     """
     img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
