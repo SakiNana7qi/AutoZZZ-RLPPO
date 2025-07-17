@@ -9,10 +9,8 @@ from ppo_agent import PPOAgent
 import config
 import os
 from torch.utils.tensorboard import SummaryWriter
-
-
-def get_human_time():
-    return time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
+import multiprocessing as mp
+from myutils import get_human_time
 
 
 def main():
@@ -27,6 +25,7 @@ def main():
     print(f"使用设备: {device}")
 
     env = ZZZEnv()
+    env.start_debug_renderer()
 
     model = ActorCritic(
         input_channels=3,
@@ -72,6 +71,17 @@ def main():
 
             next_state, reward, terminated, truncated, info = env.step(action)
 
+            debug_info = {
+                "reward": reward,
+                "action": action,
+                "action_history": env.action_history,
+                "action_mask": info.get("action_mask"),
+                "ui_state": env.ui_state,
+                "hp_agents": env.hp_agents,
+                "hp_boss": env.hp_boss,
+            }
+            env.update_debug_window(debug_info)
+
             next_action_mask = info.get(
                 "action_mask", np.ones(config.N_ACTIONS, dtype=np.bool_)
             )
@@ -84,6 +94,7 @@ def main():
 
                     # 检查环境是否已恢复
                     temp_obs = env._get_observation()
+                    env._detect_all_ui_elements()
                     if temp_obs is None:  # 窗口关闭了
                         print("暂停期间窗口关闭，终止本轮。")
                         terminated = True
@@ -100,6 +111,7 @@ def main():
                             terminated = True
                         else:
                             state = recovered_state  # 覆盖当前状态
+                            env._detect_all_ui_elements()
                             action_mask = env._get_action_mask()
                         break
 
@@ -188,6 +200,7 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.freeze_support()
     main()
 
     # env = ZZZEnv()

@@ -9,13 +9,15 @@ import mss
 import pydirectinput
 import win32gui
 from directkeys import KeyManager, move_to_and_click_relative
-from myutils import get_dpi_scale_factor, select_target_window
+from myutils import get_dpi_scale_factor, select_target_window, put_text_chinese
 import time
 import random
 from scipy import stats
 import os
 from yolo_detection import detect_image
 import collections
+import multiprocessing as mp
+from debug_renderer import renderer_process
 
 eps = 1e-6
 
@@ -80,6 +82,15 @@ class ZZZEnv(gym.Env):
         for _ in range(config.ACTION_HISTORY_LEN):
             self.action_history.append(-1)
 
+        self.ui_pipe = None
+        self.ui_process = None
+
+        self.ui_state = dict()
+
+        self.victory_confirm_frames = 0
+        self.defeat_confirm_frames = 0
+        self.final_reward_given = False
+
     def _get_current_state(self):
         """将图像和动作历史打包成一个字典作为状态"""
         return {
@@ -102,6 +113,8 @@ class ZZZEnv(gym.Env):
         # 初始化血量状态
         print("正在初始化状态...")
         current_obs = self._get_observation()
+        self._detect_all_ui_elements()
+
         if current_obs is None:
             print("[Error] 无法在 reset 时获取画面，请检查游戏窗口。")
             # 返回全黑
@@ -112,8 +125,12 @@ class ZZZEnv(gym.Env):
         self.last_hp_boss = self.hp_boss
         self.last_hp_agents = np.copy(self.hp_agents)  # 使用 np.copy 来深拷贝
 
-        self.last_action = -1
-        self.consecutive_action_count = 0
+        # self.last_action = -1 # 连续动作惩罚
+        # self.consecutive_action_count = 0
+
+        self.victory_confirm_frames = 0
+        self.defeat_confirm_frames = 0
+        self.final_reward_given = False
 
         print(
             f"初始化完成。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
@@ -137,6 +154,7 @@ class ZZZEnv(gym.Env):
         # 获取新状态
         # time.sleep(config.ACTION_DELAY)
         next_state = self._get_current_state()
+        self._detect_all_ui_elements()
 
         self.last_hp_boss = self.hp_boss
         self.last_hp_agents = np.copy(self.hp_agents)
@@ -156,6 +174,7 @@ class ZZZEnv(gym.Env):
         if action != 0:
             reward -= config.ACTION_COST  # 做非空动作有惩罚
 
+        """
         repetition_penalty = 0
         if action == self.last_action:
             self.consecutive_action_count += 1
@@ -163,7 +182,7 @@ class ZZZEnv(gym.Env):
             self.consecutive_action_count = 1
             self.last_action = action
 
-        """
+        
         # 如果连续次数超过了一个阈值，才开始施加连续用同一个动作的惩罚
         # upd250715 感觉现在这个没啥用，先注释了
         if self.consecutive_action_count > config.REPETITION_THRESHOLD:
@@ -180,9 +199,17 @@ class ZZZEnv(gym.Env):
         terminated = self._is_terminated()
         truncated = False
 
+        if terminated and not self.final_reward_given:
+            # 胜利/败北 reward
+            if self._is_victory():
+                reward += config.VICTORY_REWARD
+            elif self._is_defeat():
+                # print("DEFEAT!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                reward += config.DEFEAT_PENALTY
+            self.final_reward_given = True
+
         info = {
             "is_paused": False,
-            "repetition_penalty": repetition_penalty,
             "consecutive_actions": self.consecutive_action_count,
             "current_action": action,
             "action_mask": self._get_action_mask(),
@@ -197,7 +224,7 @@ class ZZZEnv(gym.Env):
         从暂停状态恢复
         """
         print("从暂停中恢复，正在重新校准状态...")
-        time.sleep(0.5)  # 等待画面稳定
+        time.sleep(0.1)  # 等待画面稳定
 
         current_state = self._get_current_state()
         if current_state is None:
@@ -261,6 +288,7 @@ class ZZZEnv(gym.Env):
         self.last_hp_agents = np.copy(self.hp_agents)
         self.hp_boss = self._calculate_boss_hp()
         self.hp_agents = self._calculate_agents_hp()
+        self._detect_all_ui_elements()
 
     def _calculate_agents_hp(self):
         if self.img is None or self.img.size == 0:
@@ -326,7 +354,7 @@ class ZZZEnv(gym.Env):
             result_hp = 0.0
         return result_hp
 
-    def _is_esc(self):
+    def _is_esc(self):  # TODO : 这个 yolo 没识别出来（好像也不用 yolo），待修
         if self.img is None or self.img.size == 0:
             return False
         x, y, w, h = config.ESC_COORD
@@ -334,14 +362,34 @@ class ZZZEnv(gym.Env):
         if roi.size == 0:
             return False
         name, score = detect_image(roi)
+        # print(f"esc {name}")
         return name == "settings"
 
     def _is_terminated(self):
-        if self._is_victory() or self._is_defeat():  # 先只关心一阶段
-            # if self._is_controllable():
-            #     if self._is_victory():
-            #         return True
-            #     return False
+        is_victory_condition_met = self._is_victory()
+        is_defeat_condition_met = self._is_defeat()
+
+        if is_victory_condition_met:
+            self.victory_confirm_frames += 1
+            self.defeat_confirm_frames = 0
+        elif is_defeat_condition_met:
+            self.defeat_confirm_frames += 1
+            self.victory_confirm_frames = 0
+        else:
+            self.victory_confirm_frames = 0
+            self.defeat_confirm_frames = 0
+
+        if self.victory_confirm_frames > 0:
+            print(f"胜利计数器 {self.victory_confirm_frames}")
+
+        if self.defeat_confirm_frames > 0:
+            print(f"失败计数器 {self.defeat_confirm_frames}")
+
+        if self.victory_confirm_frames >= config.TERMINATED_COUNT:
+            print(f"胜利")
+            return True
+        if self.defeat_confirm_frames >= config.TERMINATED_COUNT:
+            print(f"失败")
             return True
         return False
 
@@ -381,37 +429,25 @@ class ZZZEnv(gym.Env):
         return name == "qable"
 
     def _is_victory(self):
-        count = 0
-        while count < config.TERMINATED_COUNT and (
-            np.min(self.hp_agents) > eps and self.hp_boss < eps
-        ):
-            time.sleep(0.1)
-            self.flush()
-            count += 1
-            print(f"胜利判定次数 {count}")
-        if count == config.TERMINATED_COUNT:
-            return True
-        return False
+        return np.min(self.hp_agents) > eps and self.hp_boss < eps
 
     def _is_defeat(self):
-        count = 0
-        while count < config.TERMINATED_COUNT and (
-            np.min(self.hp_agents) < eps and self.hp_boss > eps
-        ):
-            time.sleep(0.1)
-            self.flush()
-            count += 1
-            print(f"死亡判定次数 {count}")
-        if count == config.TERMINATED_COUNT:
-            return True
-        return False
+        return np.min(self.hp_agents) < eps and self.hp_boss > eps
+
+    def _detect_all_ui_elements(self):
+        self.ui_state["is_controllable"] = self._is_controllable()
+        self.ui_state["is_qable"] = self._is_qable()
+        self.ui_state["is_switch_able"] = self._is_switch_able()
+        self.ui_state["is_dodge_able"] = self._is_dodge_able()
+        self.ui_state["is_esc"] = self._is_esc()
+        self.ui_state["is_chain_attack"] = self._is_chain_attack()
 
     def game_state(self):
-        if self._is_controllable():
+        if self.ui_state["is_controllable"]:
             return "running"
-        if self._is_esc():
+        if self.ui_state["is_esc"]:
             return "break"
-        if self._is_chain_attack():
+        if self.ui_state["is_chain_attack"]:
             print("进入连携技")
             self.key_manager.update()
             self.key_manager.do_action(7, 0.05)
@@ -458,11 +494,11 @@ class ZZZEnv(gym.Env):
 
         mask[0] = True
         mask[1] = True
-        mask[2] = self._is_dodge_able()
+        mask[2] = self.ui_state["is_dodge_able"]
         mask[3] = True
 
-        mask[4] = self._is_qable()
-        mask[5] = mask[6] = self._is_switch_able()
+        mask[4] = self.ui_state["is_qable"]
+        mask[5] = mask[6] = self.ui_state["is_switch_able"]
 
         return mask
 
@@ -475,8 +511,8 @@ class ZZZEnv(gym.Env):
                 return 0
             return np.sign(change) * (abs(change) ** exponent)
 
-        boss_hp_diff *= 2
-        agents_hp_diff *= 4
+        boss_hp_diff *= 50
+        agents_hp_diff *= 20
 
         boss_damage_reward = (
             -scale_change(boss_hp_diff, exponent=1.5) * config.BOSS_DMG_REWARD_SCALE
@@ -487,22 +523,53 @@ class ZZZEnv(gym.Env):
 
         reward = boss_damage_reward + agent_damage_penalty
 
+        print(f"bdag {boss_damage_reward:.4f} {agent_damage_penalty:.4f}")
+
         # 时间惩罚
         reward -= config.TIME_PENALTY
-
-        # 胜利/败北
-        if self._is_victory():
-            reward += config.VICTORY_REWARD
-        elif self._is_defeat():
-            # print("DEFEAT!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            reward += config.DEFEAT_PENALTY
 
         # TODO: 在这里加入其他奖励，比如操作判定极限闪避、弹刀之类的
 
         return reward
 
+    def start_debug_renderer(self):
+        """启动独立的 ui 渲染进程。"""
+        if self.ui_process and self.ui_process.is_alive():
+            print("调试窗口已在运行。")
+            return
+
+        parent_conn, child_conn = mp.Pipe()  # 双向管道
+        self.ui_pipe = parent_conn
+
+        # 启动进程
+        self.ui_process = mp.Process(target=renderer_process, args=(child_conn,))
+        self.ui_process.start()
+        print("调试窗口进程已启动。")
+
+    def update_debug_window(self, info_dict):
+        """通过管道向 ui 进程发送新数据。"""
+        if self.ui_pipe and not self.ui_pipe.closed:
+            try:
+                self.ui_pipe.send(info_dict)
+            except (BrokenPipeError, EOFError):
+                print("无法发送数据到调试窗口，管道已关闭。")
+                self.ui_pipe = None
+
     def close(self):
-        cv2.destroyAllWindows()
+        if self.ui_pipe:
+            print("正在关闭调试窗口...")
+            try:
+                self.ui_pipe.send("TERMINATE")
+                self.ui_pipe.close()
+            except (BrokenPipeError, EOFError):
+                pass  # 如果管道已经坏了，就不用管了
+
+        if self.ui_process:
+            self.ui_process.join(timeout=2)  # 等待进程结束
+            if self.ui_process.is_alive():
+                self.ui_process.terminate()  # 如果 2s 内还没结束就强制终止
+
+        # cv2.destroyAllWindows() # renderer_process 里头有了
         self.key_manager.release_all()
 
     def into_level(self):
@@ -516,7 +583,7 @@ class ZZZEnv(gym.Env):
                 self.key_manager.do_action(11, 0.5)
                 idx += 1
             if idx == 1 and time.time() - start_time > 1.0:
-                self.key_manager.do_action(10, 1.0)
+                self.key_manager.do_action(10, 0.75)
                 idx += 1
             if idx == 2 and time.time() - start_time > 2.0:
                 self.key_manager.press(F, 0.1)

@@ -3,6 +3,9 @@
 import ctypes
 import win32gui
 import time
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 def get_dpi_scale_factor(hwnd: int) -> float:
@@ -58,10 +61,48 @@ def select_target_window() -> int | None:
             return None
         choice = int(choice_str)
         if 0 <= choice < len(windows):
-            time.sleep(1)
+            time.sleep(2)
             return windows[choice][0]
     except (ValueError, IndexError):
         pass
 
     print("无效的选择。")
     return None
+
+
+def put_text_chinese(image, text, position, font_path, font_size, color):
+    """
+    在OpenCV图像上绘制支持中文的文本。
+    :param image: OpenCV图像 (NumPy ndarray)
+    :param text: 要绘制的文本 (可以是中文)
+    :param position: 文本左上角的坐标 (x, y)
+    :param font_path: ttf字体文件的路径
+    :param font_size: 字体大小
+    :param color: 文本颜色，格式为 BGR (e.g., (255, 0, 0) for blue)
+    :return: 绘制了文本的OpenCV图像
+    """
+    # 将OpenCV图像 (BGR) 转换为Pillow图像 (RGB)
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    # 创建一个可以在图像上绘图的对象
+    draw = ImageDraw.Draw(image)
+
+    # 加载字体文件
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except IOError:
+        print(f"字体文件未找到: {font_path}，将使用默认字体。")
+        font = ImageFont.load_default()
+
+    # 在指定位置绘制文本
+    # 注意：Pillow的颜色格式是RGB，但我们传入的color是BGR，需要转换
+    rgb_color = (color[2], color[1], color[0])
+    draw.text(position, text, font=font, fill=rgb_color)
+
+    # 将Pillow图像 (RGB) 转换回OpenCV图像 (BGR)
+    return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+
+
+def get_human_time():
+    return time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
