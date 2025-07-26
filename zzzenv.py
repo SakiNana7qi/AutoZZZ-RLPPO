@@ -91,6 +91,16 @@ class ZZZEnv(gym.Env):
         self.defeat_confirm_frames = 0
         self.final_reward_given = False
 
+        # CD 状态计时器 0=可用, 1=小cd, 2=大cd
+        self.dodge_state = 0
+        self.dodge_timer = 0.0
+
+        self.switch_state = 0
+        self.switch_timer = 0.0
+
+        self.q_active = False
+        self.q_timer = 0.0
+
     def _get_current_state(self):
         """将图像和动作历史打包成一个字典作为状态"""
         return {
@@ -132,6 +142,15 @@ class ZZZEnv(gym.Env):
         self.defeat_confirm_frames = 0
         self.final_reward_given = False
 
+        self.dodge_state = 0
+        self.dodge_timer = 0.0
+
+        self.switch_state = 0
+        self.switch_timer = 0.0
+
+        self.q_active = False
+        self.q_timer = 0.0
+
         print(
             f"初始化完成。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
@@ -142,6 +161,27 @@ class ZZZEnv(gym.Env):
         info = {"action_mask": self._get_action_mask()}
         return self._get_current_state(), info
 
+    def update_cd_timer(self, action):
+        if action == 2:  # 按下闪避
+            if self.dodge_state == 0:
+                self.dodge_state = 1
+                self.dodge_timer = time.time()
+            elif self.dodge_state == 1:
+                if 0.35 <= (time.time() - self.dodge_timer) <= 1.0:
+                    self.dodge_state = 2
+                    self.dodge_timer = time.time()
+        elif action == 5 or action == 6:
+            if self.switch_state == 0:
+                self.switch_state = 1
+                self.switch_timer = time.time()
+            elif self.switch_state == 1:
+                if (time.time() - self.switch_timer) <= 0.65:
+                    self.switch_state = 2
+                    self.switch_timer = time.time()
+        elif action == 4:
+            self.q_active = True
+            self.q_timer = time.time()
+
     def step(self, action):
         """执行动作"""
         self.key_manager.update()
@@ -150,6 +190,7 @@ class ZZZEnv(gym.Env):
         self.key_manager.update()
 
         self.action_history.append(action)
+        self.update_cd_timer(action)
 
         # 获取新状态
         # time.sleep(config.ACTION_DELAY)
@@ -381,16 +422,6 @@ class ZZZEnv(gym.Env):
                 config.CHAINATK_COORD[0] : config.CHAINATK_COORD[0]
                 + config.CHAINATK_COORD[2],
             ],
-            "switch": self.img[
-                config.SWITCH_COORD[1] : config.SWITCH_COORD[1]
-                + config.SWITCH_COORD[3],
-                config.SWITCH_COORD[0] : config.SWITCH_COORD[0]
-                + config.SWITCH_COORD[2],
-            ],
-            "dodge": self.img[
-                config.DODGE_COORD[1] : config.DODGE_COORD[1] + config.DODGE_COORD[3],
-                config.DODGE_COORD[0] : config.DODGE_COORD[0] + config.DODGE_COORD[2],
-            ],
         }
 
         roi_names_ordered = [name for name, roi in rois.items() if roi.size > 0]
@@ -415,10 +446,6 @@ class ZZZEnv(gym.Env):
         )
 
         self.ui_state["is_qable"] = detection_final_results["q"] == "qable"
-        self.ui_state["is_switch_able"] = not (
-            detection_final_results["switch"] == "switchdisable"
-        )
-        self.ui_state["is_dodge_able"] = detection_final_results["dodge"] == "dodgeable"
 
     def _is_terminated(self):
         is_victory_condition_met = self._is_victory()
@@ -454,8 +481,17 @@ class ZZZEnv(gym.Env):
     def _is_defeat(self):
         return np.min(self.hp_agents) < eps and self.hp_boss > eps
 
+    def _is_firstline_black(
+        self,
+    ):  # 从ESC恢复/从running到ESC 的时候要特判一下，有一个黑条渐变动画
+        first_row = self.img[0, :20, :]
+        max_channel_values = np.max(first_row, axis=1)
+        return np.all(max_channel_values < 2)
+
     def game_state(self):
         if self.ui_state.get("is_controllable", False):
+            if self._is_firstline_black():
+                return "break"  # 防止 hp 0 0 0 0 导致 reward 爆了
             return "running"
         if self.ui_state.get("is_esc", False):
             return "break"
@@ -484,13 +520,57 @@ class ZZZEnv(gym.Env):
         """
         mask = np.ones(config.N_ACTIONS, dtype=np.bool_)
 
+        current_time = time.time()
+
+        # 开大后停 4os 让他知道是开 q 才有 reward
+        if self.q_active:
+            if current_time - self.q_timer > 4.0:
+                self.q_active = False
+            else:
+                mask[:] = False
+                mask[0] = True
+                return mask
+
+        is_dodge_available = False
+        if self.dodge_state == 0:
+            is_dodge_available = True
+        elif self.dodge_state == 1:
+            elapsed = current_time - self.dodge_timer
+            if elapsed > 1.0:
+                self.dodge_state = 0
+                is_dodge_available = True
+            elif 0.35 <= elapsed <= 1.0:
+                is_dodge_available = True
+        elif self.dodge_state == 2:
+            elapsed = current_time - self.dodge_timer
+            if elapsed > 0.8:
+                self.dodge_state = 0
+                is_dodge_available = True
+        mask[2] = is_dodge_available
+
+        is_switch_available = False
+        if self.switch_state == 0:
+            is_switch_available = True
+        elif self.switch_state == 1:
+            elapsed = current_time - self.switch_timer
+            if elapsed > 0.65:
+                self.switch_state = 0
+                is_switch_available = True
+            else:
+                is_switch_available = True
+        elif self.switch_state == 2:
+            elapsed = current_time - self.switch_timer
+            if elapsed > 0.65:
+                self.switch_state = 0
+                is_switch_available = True
+        mask[5] = is_switch_available
+        mask[6] = is_switch_available
+
         mask[0] = True
         mask[1] = True
-        mask[2] = self.ui_state.get("is_dodge_able", False)
         mask[3] = True
 
         mask[4] = self.ui_state.get("is_qable", False)
-        mask[5] = mask[6] = self.ui_state.get("is_switch_able", False)
 
         return mask
 

@@ -53,6 +53,9 @@ def main():
     total_timesteps = 0
     episode_num = 0
 
+    sSpd_sum = 0.0
+    sSpd_cnt = 0
+
     while total_timesteps < config.MAX_TIMESTEPS:
         state, info = env.reset()
         action_mask = info.get("action_mask", np.ones(config.N_ACTIONS, dtype=np.bool_))
@@ -135,8 +138,12 @@ def main():
             episode_reward += reward
             episode_len += 1
             total_timesteps += 1
+
+            sSpd = 1.0 / (time.time() - episode_time)
+            sSpd_sum += sSpd
+            sSpd_cnt += 1
             print(
-                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | reward {reward:8.6f} | stepspeed: {1./(time.time()-episode_time):.1f}steps/s"
+                f"E {episode_num+1:2d} | Step {total_timesteps:05d} | reward {reward:+8.6f} | sSpd: {sSpd:4.1f}steps/s avg {sSpd_sum/sSpd_cnt:4.1f}steps/s"
             )
 
             if len(agent.memory["image_states"]) >= config.UPDATE_INTERVAL:
