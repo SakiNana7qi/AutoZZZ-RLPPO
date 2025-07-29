@@ -22,6 +22,62 @@ from debug_renderer import renderer_process
 eps = 1e-6
 
 
+class RewardNormalizer:
+    """
+    使用 Welford's online algorithm 动态地将奖励归一化到零均值和单位标准差。
+    我们只使用标准差来缩放奖励，而不减去均值，以保留奖励的原始正负信号。
+    基于 OpenAI Baselines 和 Stable-Baselines3 中的标准做法
+    """
+
+    def __init__(self, num_envs=1, clip_reward=10.0, gamma=0.99, epsilon=1e-8):
+        self.mean = np.zeros(num_envs)
+        self.var = np.ones(num_envs)
+        self.count = epsilon
+
+        self.return_rms = RunningMeanStd(shape=())
+        self.clip_reward = clip_reward
+        self.gamma = gamma
+        self.epsilon = epsilon
+
+    def __call__(self, reward):
+        """
+        根据运行时的标准差缩放奖励。
+        """
+        reward = np.clip(reward, -self.clip_reward, self.clip_reward)
+        self.return_rms.update(np.array([reward]))
+        scaled_reward = reward / (np.sqrt(self.return_rms.var) + self.epsilon)
+        return scaled_reward
+
+
+class RunningMeanStd:
+    """Welford's online algorithm"""
+
+    def __init__(self, shape=()):
+        self.mean = np.zeros(shape, "float64")
+        self.var = np.ones(shape, "float64")
+        self.count = 1e-4
+
+    def update(self, x):
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0]
+        self.update_from_moments(batch_mean, batch_var, batch_count)
+
+    def update_from_moments(self, batch_mean, batch_var, batch_count):
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / tot_count
+        new_var = M2 / tot_count
+
+        self.mean = new_mean
+        self.var = new_var
+        self.count = tot_count
+
+
 class ZZZEnv(gym.Env):
     def __init__(self):
         super(ZZZEnv, self).__init__()
@@ -53,9 +109,11 @@ class ZZZEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(config.IMG_HEIGHT, config.IMG_WIDTH, 3),
+            shape=(config.IMG_HEIGHT, config.IMG_WIDTH, 3),  # [K, H, W, C] K为帧堆叠
             dtype=np.uint8,
         )
+
+        self.action_space = spaces.Discrete(config.N_ACTIONS)
 
         self.hwnd = select_target_window()
         if not self.hwnd:
@@ -68,6 +126,9 @@ class ZZZEnv(gym.Env):
 
         self.key_manager = KeyManager()  # 创建非阻塞键盘管理器
         self.img = None  # 实时截的图
+
+        self.frame_stack = collections.deque(maxlen=config.FRAME_STACK_SIZE)
+        # maxlen 指定后，满了自动会 pop
 
         self.hp_agents = [0.0, 0.0, 0.0]  # 血条
         self.hp_boss = 0.0
@@ -87,6 +148,7 @@ class ZZZEnv(gym.Env):
 
         self.ui_state = {}
 
+        self.killed_confirm_frames = 0
         self.victory_confirm_frames = 0
         self.defeat_confirm_frames = 0
         self.final_reward_given = False
@@ -101,10 +163,18 @@ class ZZZEnv(gym.Env):
         self.q_active = False
         self.q_timer = 0.0
 
+        self.reward_normalizer = RewardNormalizer(gamma=config.GAMMA)
+
+        self.last_special_event = "none"
+
+    def _get_stacked_frames(self):
+        """将帧堆叠从队列变成 numpy 数组"""
+        return np.stack(self.frame_stack, axis=0)
+
     def _get_current_state(self):
-        """将图像和动作历史打包成一个字典作为状态"""
+        """将堆叠后的图像和动作历史打包成一个字典作为状态"""
         return {
-            "image": self._get_observation(),
+            "image": self._get_stacked_frames(),
             "action_history": np.array(self.action_history, dtype=np.int32),
         }
 
@@ -127,8 +197,14 @@ class ZZZEnv(gym.Env):
 
         if current_obs is None:
             print("[Error] 无法在 reset 时获取画面，请检查游戏窗口。")
-            # 返回全黑
-            return np.zeros(self.observation_space.shape, dtype=np.uint8), {}
+            current_obs = np.zeros(
+                self.observation_space.shape, dtype=np.uint8
+            )  # 用全黑填充
+
+        # 用第一帧填满
+        self.frame_stack.clear()
+        for _ in range(config.FRAME_STACK_SIZE):
+            self.frame_stack.append(current_obs)
 
         self.hp_boss = self._calculate_boss_hp()
         self.hp_agents = self._calculate_agents_hp()
@@ -138,8 +214,9 @@ class ZZZEnv(gym.Env):
         # self.last_action = -1 # 连续动作惩罚
         # self.consecutive_action_count = 0
 
-        self.victory_confirm_frames = 0
+        self.killed_confirm_frames = 0
         self.defeat_confirm_frames = 0
+        self.victory_confirm_frames = 0
         self.final_reward_given = False
 
         self.dodge_state = 0
@@ -192,6 +269,12 @@ class ZZZEnv(gym.Env):
         self.action_history.append(action)
         self.update_cd_timer(action)
 
+        new_obs = self._get_observation()
+        if new_obs is None:
+            # 同样用最后一帧填充
+            new_obs = self.frame_stack[-1]
+        self.frame_stack.append(new_obs)
+
         # 获取新状态
         # time.sleep(config.ACTION_DELAY)
         next_state = self._get_current_state()
@@ -210,10 +293,10 @@ class ZZZEnv(gym.Env):
             return next_state, 0.0, False, False, info
 
         # 计算奖励
-        reward = self._calculate_reward()
+        raw_reward = self._calculate_reward()
 
         if action != 0:
-            reward -= config.ACTION_COST  # 做非空动作有惩罚
+            raw_reward -= config.ACTION_COST  # 做非空动作有惩罚
 
         """
         repetition_penalty = 0
@@ -236,13 +319,27 @@ class ZZZEnv(gym.Env):
             reward -= repetition_penalty
         """
 
+        # reward = self.reward_normalizer(raw_reward)
+        # byd 先别急，用了直接训爆了
+
+        scaled_reward = raw_reward * 0.1  # 先用老手艺
+        clipped_reward = np.clip(scaled_reward, -1.0, 1.0)
+
+        reward = clipped_reward
+
         # 判断是否结束
-        terminated = self._is_terminated()
+        terminate_state = self._is_terminated()
+        terminated = terminate_state == 1
+        is_stage_victory = terminate_state == 2  # 阶段性胜利
         truncated = False
+
+        if terminate_state == 2:
+            print("检测到阶段胜利，将暂停训练...")
+            reward += config.VICTORY_REWARD
 
         if terminated and not self.final_reward_given:
             # 胜利/败北 reward
-            if self._is_victory():
+            if self.ui_state["is_victory"]:
                 reward += config.VICTORY_REWARD
             elif self._is_defeat():
                 # print("DEFEAT!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
@@ -254,6 +351,7 @@ class ZZZEnv(gym.Env):
             "consecutive_actions": self.consecutive_action_count,
             "current_action": action,
             "action_mask": self._get_action_mask(),
+            "is_stage_victory": is_stage_victory,
         }
         # TODO:
         # truncated 是时间到了而不是结束 terminated 了，可能在有利局面下结束
@@ -264,12 +362,21 @@ class ZZZEnv(gym.Env):
         """
         从暂停状态恢复
         """
-        print("从暂停中恢复，正在重新校准状态...")
+        print("[Info] 从暂停中恢复，正在重新校准状态...")
         time.sleep(0.1)  # 等待画面稳定
+
+        obs = self._get_observation()
+        if obs is None:
+            print("[Error] 恢复失败，无法获取画面。")
+            return None
+
+        self.frame_stack.clear()
+        for _ in range(config.FRAME_STACK_SIZE):
+            self.frame_stack.append(obs)
 
         current_state = self._get_current_state()
         if current_state is None:
-            print("恢复失败，无法获取画面。")
+            print("[Error] 恢复失败，无法获取画面。")
             return None
 
         self.hp_boss = self._calculate_boss_hp()
@@ -279,7 +386,7 @@ class ZZZEnv(gym.Env):
         self.last_hp_agents = np.copy(self.hp_agents)
 
         print(
-            f"状态已校准。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
+            f"[Info] 状态已校准。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
 
         return current_state
@@ -290,7 +397,7 @@ class ZZZEnv(gym.Env):
 
         try:
             if not win32gui.IsWindow(self.hwnd):
-                print("目标窗口已关闭。")
+                print("[Error] 目标窗口已关闭。")
                 self.hwnd = None
                 return None
 
@@ -318,7 +425,9 @@ class ZZZEnv(gym.Env):
 
             # 压缩图片
             img_resized = cv2.resize(self.img, (config.IMG_WIDTH, config.IMG_HEIGHT))
-            return img_resized
+            # 转成灰度图
+            img_gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+            return img_gray
         except Exception as e:
             print(f"捕捉画面时发生错误: {e}")
             return None
@@ -404,14 +513,6 @@ class ZZZEnv(gym.Env):
             return
 
         rois = {
-            "esc": self.img[
-                config.ESC_COORD[1] : config.ESC_COORD[1] + config.ESC_COORD[3],
-                config.ESC_COORD[0] : config.ESC_COORD[0] + config.ESC_COORD[2],
-            ],
-            "clock": self.img[
-                config.CLOCK_COORD[1] : config.CLOCK_COORD[1] + config.CLOCK_COORD[3],
-                config.CLOCK_COORD[0] : config.CLOCK_COORD[0] + config.CLOCK_COORD[2],
-            ],
             "q": self.img[
                 config.Q_COORD[1] : config.Q_COORD[1] + config.Q_COORD[3],
                 config.Q_COORD[0] : config.Q_COORD[0] + config.Q_COORD[2],
@@ -421,6 +522,28 @@ class ZZZEnv(gym.Env):
                 + config.CHAINATK_COORD[3],
                 config.CHAINATK_COORD[0] : config.CHAINATK_COORD[0]
                 + config.CHAINATK_COORD[2],
+            ],
+            "back_pause": self.img[
+                config.BACK_PAUSE_COORD[1] : config.BACK_PAUSE_COORD[1]
+                + config.BACK_PAUSE_COORD[3],
+                config.BACK_PAUSE_COORD[0] : config.BACK_PAUSE_COORD[0]
+                + config.BACK_PAUSE_COORD[2],
+            ],
+            "investigation": self.img[
+                config.INVESTIGATION_COMPLETE_COORD[
+                    1
+                ] : config.INVESTIGATION_COMPLETE_COORD[1]
+                + config.INVESTIGATION_COMPLETE_COORD[3],
+                config.INVESTIGATION_COMPLETE_COORD[
+                    0
+                ] : config.INVESTIGATION_COMPLETE_COORD[0]
+                + config.INVESTIGATION_COMPLETE_COORD[2],
+            ],
+            "decibel": self.img[
+                config.DECIBEL_COORD[1] : config.DECIBEL_COORD[1]
+                + config.DECIBEL_COORD[3],
+                config.DECIBEL_COORD[0] : config.DECIBEL_COORD[0]
+                + config.DECIBEL_COORD[2],
             ],
         }
 
@@ -439,44 +562,89 @@ class ZZZEnv(gym.Env):
             class_name, score = detection_results[i]
             detection_final_results[name] = class_name
 
-        self.ui_state["is_esc"] = detection_final_results["esc"] == "settings"
-        self.ui_state["is_controllable"] = detection_final_results["clock"] == "clock"
+        self.ui_state["is_esc"] = detection_final_results["back_pause"] == "back"
+        self.ui_state["is_controllable"] = (
+            detection_final_results["back_pause"] == "pause"
+        )
         self.ui_state["is_chain_attack"] = (
             detection_final_results["chain_attack"] == "chainatk"
         )
 
         self.ui_state["is_qable"] = detection_final_results["q"] == "qable"
+        self.ui_state["is_victory"] = (not self.ui_state["is_controllable"]) and (
+            detection_final_results["investigation"] == "investigation_complete"
+        )
+
+        result_decibel = detection_final_results["decibel"]
+        self.ui_state["decibel"] = "none"
+        if len(result_decibel) > 8:
+            if result_decibel[:8] == "decibel_":
+                self.ui_state["decibel"] = result_decibel[8:]
+
+    def _no_in_game(self):
+        """从 PPO learning 中恢复特判，在开终结技后胜利途中 ESC 不了"""
+        return (not self.ui_state["is_esc"]) and (not self.ui_state["is_controllable"])
 
     def _is_terminated(self):
-        is_victory_condition_met = self._is_victory()
+        is_killed_condition_met = self._is_killed()
+        is_victory_condition_met = self.ui_state["is_victory"]
         is_defeat_condition_met = self._is_defeat()
+
+        if (
+            is_killed_condition_met
+            and is_defeat_condition_met
+            and not is_victory_condition_met
+        ):
+            return 0
 
         if is_victory_condition_met:
             self.victory_confirm_frames += 1
+            self.killed_confirm_frames = 0
             self.defeat_confirm_frames = 0
+        elif is_killed_condition_met:
+            self.killed_confirm_frames += 1
+            self.defeat_confirm_frames = 0
+            self.victory_confirm_frames = 0
         elif is_defeat_condition_met:
             self.defeat_confirm_frames += 1
+            self.killed_confirm_frames = 0
             self.victory_confirm_frames = 0
         else:
-            self.victory_confirm_frames = 0
+            self.killed_confirm_frames = 0
             self.defeat_confirm_frames = 0
+            self.victory_confirm_frames = 0
 
-        if self.victory_confirm_frames > 0:
-            print(f"胜利计数器 {self.victory_confirm_frames}")
+        if self.killed_confirm_frames > 0:
+            print(f"阶段胜利计数器 {self.killed_confirm_frames}")
 
         if self.defeat_confirm_frames > 0:
             print(f"失败计数器 {self.defeat_confirm_frames}")
 
+        if self.victory_confirm_frames > 0:
+            print(f"胜利计数器 {self.victory_confirm_frames}")
+
         if self.victory_confirm_frames >= config.TERMINATED_COUNT:
             print(f"胜利")
-            return True
+            return 1
+        if self.killed_confirm_frames >= config.TERMINATED_COUNT:
+            print(f"阶段性胜利")
+            return 2
         if self.defeat_confirm_frames >= config.TERMINATED_COUNT:
             print(f"失败")
-            return True
-        return False
+            return 1
+        return 0
 
-    def _is_victory(self):
-        return np.min(self.hp_agents) > eps and self.hp_boss < eps
+    def _is_killed(self):
+        no_hp_values = np.min(self.hp_agents) > eps and self.hp_boss < eps
+        hp_top_row = self.img[
+            config.BOSS_HP_TOP_COORD[1],
+            config.BOSS_HP_TOP_COORD[0] : config.BOSS_HP_TOP_COORD[0]
+            + config.BOSS_HP_TOP_COORD[2],
+            :,
+        ]
+        max_channel_values = np.max(hp_top_row, axis=1)
+        has_hp_status = np.all(max_channel_values < 10)
+        return no_hp_values and (not has_hp_status)
 
     def _is_defeat(self):
         return np.min(self.hp_agents) < eps and self.hp_boss > eps
@@ -489,6 +657,9 @@ class ZZZEnv(gym.Env):
         return np.all(max_channel_values < 2)
 
     def game_state(self):
+        # if self.defeat_confirm_frames > 0 or self.victory_confirm_frames > 0:  # 判定中
+        # killed 不参与是因为可能还有丝血
+        # return "running"
         if self.ui_state.get("is_controllable", False):
             if self._is_firstline_black():
                 return "break"  # 防止 hp 0 0 0 0 导致 reward 爆了
@@ -505,12 +676,6 @@ class ZZZEnv(gym.Env):
             self.key_manager.release_all()
             print("连携技完成")
             return "break"
-        if self.defeat_confirm_frames > 0 or self.victory_confirm_frames > 0:  # 判定中
-            return "break"
-        # if self._is_victory() or self._is_defeat():
-        # return "terminated"
-        # if np.max(self.hp_agents) < eps and self.hp_boss < eps:
-        # return "running"
         print("开大了")
         return "break"
 
@@ -598,7 +763,25 @@ class ZZZEnv(gym.Env):
         # 时间惩罚
         reward -= config.TIME_PENALTY
 
-        # TODO: 在这里加入其他奖励，比如操作判定极限闪避、弹刀之类的
+        current_special_event = self.ui_state["decibel"]
+        special_reward = 0
+        if (
+            current_special_event != "none"
+            and current_special_event != self.last_special_event
+        ):
+            if not current_special_event == "maximum":
+                special_reward += config.DECIBEL_REWARD
+            if current_special_event == "perfect_dodge":
+                special_reward = config.PERFECT_DODGE_REWARD
+            elif current_special_event == "assist_attack":
+                special_reward = config.ASSIST_ATTACK_REWARD
+            # ... 其他事件
+            print(
+                f"[Info/Reward Shaping] 触发新事件: {current_special_event}，奖励: {special_reward}"
+            )
+
+        self.last_special_event = current_special_event
+        reward += special_reward
 
         return reward
 

@@ -52,10 +52,21 @@ class PPOAgent:
             self.memory[key].clear()
 
     def store_transition(
-        self, state, action, log_prob, reward, done, value, action_mask
+        self,
+        state,
+        action,
+        log_prob,
+        reward,
+        done,
+        value,
+        action_mask,
+        is_stage_victory=False,
     ):
+        gae_done = (
+            done or is_stage_victory
+        )  # 转阶段伪造 done 信号，使得价值回溯能够正常运行
         self.memory["image_states"].append(
-            torch.tensor(state["image"], dtype=torch.bfloat16)
+            torch.tensor(state["image"], dtype=torch.uint8)
         )
         self.memory["action_history_states"].append(
             torch.tensor(state["action_history"], dtype=torch.int64)
@@ -63,17 +74,17 @@ class PPOAgent:
         self.memory["actions"].append(torch.tensor(action, dtype=torch.int64))
         self.memory["log_probs"].append(log_prob)
         self.memory["rewards"].append(torch.tensor(reward, dtype=torch.bfloat16))
-        self.memory["dones"].append(torch.tensor(done, dtype=torch.bfloat16))
+        self.memory["dones"].append(torch.tensor(gae_done, dtype=torch.bfloat16))
         self.memory["values"].append(value)
         self.memory["action_masks"].append(torch.tensor(action_mask, dtype=torch.bool))
 
     def select_action(self, state, action_mask):
+
         image_tensor = (
             torch.tensor(state["image"], dtype=torch.bfloat16)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
+            .unsqueeze(0)  # [K, H, W] -> [1, K, H, W]
             .to(self.device)
-        )  # [H, W, C] -> [C, H, W] -> [1, C, H, W]
+        )  # state["image"] 是 [K, H, W]
         # 将 numpy state 转换为 torch tensor
         action_history_tensor = (
             torch.tensor(state["action_history"], dtype=torch.int64)
@@ -96,23 +107,36 @@ class PPOAgent:
         return action.item(), log_prob.cpu(), value.cpu()
 
     def learn(self):
-        image_states = torch.stack(self.memory["image_states"]).to(
-            self.device
-        )  # 从内存中读取数据
-        action_history_states = torch.stack(self.memory["action_history_states"]).to(
-            self.device
+        # 从内存中读取数据
+        image_states = torch.stack(
+            [s.to(self.device) for s in self.memory["image_states"]]
+        ).to(
+            dtype=torch.bfloat16
+        )  # [N, K, H, W]
+        action_history_states = torch.stack(
+            [s.to(self.device) for s in self.memory["action_history_states"]]
         )
-        actions = torch.stack(self.memory["actions"]).to(self.device)
-        old_log_probs = torch.stack(self.memory["log_probs"]).to(self.device)
-        rewards = self.memory["rewards"]
-        dones = self.memory["dones"]
-        values = torch.stack(self.memory["values"]).squeeze().to(self.device)
-        action_masks = torch.stack(self.memory["action_masks"]).to(self.device)
+        actions = torch.stack([s.to(self.device) for s in self.memory["actions"]])
+        old_log_probs = torch.stack(
+            [s.to(self.device) for s in self.memory["log_probs"]]
+        )
+        rewards = [r.to(self.device) for r in self.memory["rewards"]]
+        dones = [d.to(self.device) for d in self.memory["dones"]]
+        values = torch.stack(
+            [v.to(self.device) for v in self.memory["values"]]
+        ).squeeze()
+        action_masks = torch.stack(
+            [m.to(self.device) for m in self.memory["action_masks"]]
+        )
+        # 这里为什么要在里面 todevice 而不是外面？
+        # 因为如果里面两个东西的 device 不一样，一起 todevice 就炸了
 
         # 用 GAE 计算 Advantage 和 Returns
         advantages = torch.zeros(len(rewards), dtype=torch.bfloat16).to(self.device)
         last_advantage = 0
-        last_value = values[-1]  # Bootstrapping
+        last_value = (
+            values[-1] if len(values) > 0 else torch.tensor(0.0).to(self.device)
+        )  # Bootstrapping
 
         for t in reversed(range(len(rewards))):
             mask = 1.0 - dones[t]
@@ -130,7 +154,7 @@ class PPOAgent:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # epochjs
-        image_states = image_states.permute(0, 3, 1, 2)  # [N, H, W, C] -> [N, C, H, W]
+        # image_states = image_states.permute(0, 3, 1, 2)  # [N, H, W, C] -> [N, C, H, W] # Obsolete
 
         num_samples = len(image_states)
         indices = np.arange(num_samples)
@@ -178,7 +202,17 @@ class PPOAgent:
                 actor_loss = -torch.min(surr1, surr2).mean()
 
                 # critic loss (MSE)
-                critic_loss = F.mse_loss(new_values, batch_returns)
+                critic_loss_unclipped = F.mse_loss(new_values, batch_returns)
+                # with value clipping
+                values_clipped = values[batch_indices] + torch.clamp(
+                    new_values - values[batch_indices],
+                    -self.policy_clip,
+                    self.policy_clip,
+                )
+                critic_loss_clipped = F.mse_loss(values_clipped, batch_returns)
+                critic_loss = 0.5 * torch.max(
+                    critic_loss_unclipped, critic_loss_clipped
+                )
 
                 # 计算熵损失，防止摆烂
                 entropy_loss = -new_dist.entropy().mean()
