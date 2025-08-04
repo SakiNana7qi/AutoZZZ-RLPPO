@@ -1,58 +1,54 @@
-# debug_renderer.py
+# debug_renderer_thread.py
 
+import threading
 import cv2
-import numpy as np
-from multiprocessing.connection import Connection
 import time
+import numpy as np
 from myutils import put_text_chinese
 import config
-from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageFont
+import copy
 
 
-def renderer_process(pipe: Connection):
-    """
-    这是一个独立的进程，负责接收数据并渲染调试窗口。
-    :param pipe: 用于接收数据的管道连接对象。
-    :param font_path: 字体文件的路径。
-    """
-    window_name = "AutoZZZ Debug Status"
-    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-    font_path = config.font_path
-    font_size = 18
+class DebugRendererThread(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)  # 设置为守护线程，主线程退出时它会自动退出
+        self.latest_data = {}
+        self.lock = threading.Lock()  # 线程锁，用于安全地更新数据
+        self.running = True
 
-    # 加载字体文件
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except IOError:
-        print(f"字体文件未找到: {font_path}，将使用默认字体。")
-        font = ImageFont.load_default()
+    def update_data(self, new_data):
+        with self.lock:
+            self.latest_data.update(new_data)
 
-    latest_data = {}
+    def stop(self):
+        self.running = False
 
-    while True:
-        try:
-            # [非阻塞] 检查管道中是否有新数据
-            if pipe.poll():
-                data = pipe.recv()
-                if data == "TERMINATE":  # 收到终止信号
-                    break
-                latest_data.update(data)
+    def run(self):  # 线程的主体
+        window_name = "AutoZZZ Debug Status"
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+        font = ImageFont.truetype(config.font_path, 18)
 
-            debug_panel = np.zeros((400, 500, 3), dtype=np.uint8)
+        while self.running:
+            with self.lock:
+                # 复制数据以避免在渲染时数据被修改
+                data_to_render = self.latest_data.copy()
+
+            debug_panel = np.zeros((500, 400, 3), dtype=np.uint8)
             line_height = 25
             x_pos = 10
 
-            reward = latest_data.get("reward", 0)
+            reward = data_to_render.get("reward", 0)
             reward_color = (0, 255, 0) if reward > 0 else (0, 0, 255)
             debug_panel = put_text_chinese(
                 debug_panel,
-                f"Reward: {reward:.4f}",
+                f"Reward: {reward:+.4f}",
                 (x_pos, line_height * 0),
                 font,
                 reward_color,
             )
 
-            action = latest_data.get("action", -1)
+            action = data_to_render.get("action", -1)
             debug_panel = put_text_chinese(
                 debug_panel,
                 f"Action: {config.ACTION_NAME[action]}",
@@ -61,7 +57,7 @@ def renderer_process(pipe: Connection):
                 (255, 255, 255),
             )
 
-            action_history = latest_data.get(
+            action_history = data_to_render.get(
                 "action_history",
                 [
                     -1,
@@ -76,7 +72,7 @@ def renderer_process(pipe: Connection):
                 (200, 200, 200),
             )
 
-            hp_boss = latest_data.get("hp_boss", -1)
+            hp_boss = data_to_render.get("hp_boss", -1)
 
             debug_panel = put_text_chinese(
                 debug_panel,
@@ -85,7 +81,7 @@ def renderer_process(pipe: Connection):
                 font,
                 (0, 165, 255),
             )
-            hp_agents = latest_data.get("hp_agents", [-1, -1, -1])
+            hp_agents = data_to_render.get("hp_agents", [-1, -1, -1])
             agent_hps_str = ", ".join([f"{hp:.2f}" for hp in hp_agents])
             debug_panel = put_text_chinese(
                 debug_panel,
@@ -95,7 +91,7 @@ def renderer_process(pipe: Connection):
                 (0, 255, 0),
             )
 
-            action_mask = latest_data.get("action_mask", "N/A")
+            action_mask = data_to_render.get("action_mask", "N/A")
 
             debug_panel = put_text_chinese(
                 debug_panel,
@@ -130,7 +126,7 @@ def renderer_process(pipe: Connection):
 
             status_str = "N/A"
             status_color = (255, 0, 0)
-            ui_state = latest_data.get("ui_state", None)
+            ui_state = data_to_render.get("ui_state", None)
             if not ui_state == None:
                 if ui_state.get("is_controllable", False):
                     status_str = "Running"
@@ -150,21 +146,57 @@ def renderer_process(pipe: Connection):
                 status_color,
             )
 
-            cv2.imshow(window_name, debug_panel)
+            debug_panel = put_text_chinese(
+                debug_panel,
+                f"Steps: {data_to_render.get("timesteps", -1):06}",
+                (x_pos, line_height * 11),
+                font,
+                (255, 255, 255),
+            )
 
-            # 等待一小段时间
-            if cv2.waitKey(1) & 0xFF == ord("q"):  # 按 q 退出
+            # frame_stack
+
+            debug_panel = put_text_chinese(
+                debug_panel,
+                "Frame Stack (T-3 to T):",
+                (x_pos, line_height * 13),
+                font,
+                (255, 255, 255),
+            )
+
+            frame_stack = data_to_render.get("frame_stack")
+            if frame_stack:
+                thumb_w, thumb_h = 80, 45
+                spacing = 10
+
+                thumbnails = []
+                for frame in frame_stack:
+                    if frame.ndim == 2:
+                        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    else:
+                        frame_bgr = frame
+
+                    thumbnail = cv2.resize(frame_bgr, (thumb_w, thumb_h))
+                    thumbnails.append(thumbnail)
+
+                while len(thumbnails) < config.FRAME_STACK_SIZE:
+                    thumbnails.append(np.zeros((thumb_h, thumb_w, 3), dtype=np.uint8))
+
+                try:
+                    h_stack = cv2.hconcat(thumbnails)
+
+                    y_offset = int(line_height * 14)
+                    debug_panel[
+                        y_offset : y_offset + thumb_h, x_pos : x_pos + h_stack.shape[1]
+                    ] = h_stack
+                except cv2.error as e:
+                    print(f"[Error] cv2.error: {e}")
+
+            cv2.imshow(window_name, debug_panel)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
-            time.sleep(0.05)  # 20 fps
+            time.sleep(0.05)  # 20fps
 
-        except (EOFError, BrokenPipeError):
-            # 如果主进程意外关闭了管道，也退出循环
-            print("调试窗口：主进程已关闭，窗口将关闭。")
-            break
-        except Exception as e:
-            print(f"调试窗口发生错误: {e}")
-            break
-
-    cv2.destroyAllWindows()
-    print("调试窗口已关闭。")
+        cv2.destroyAllWindows()
+        print("调试线程已关闭。")

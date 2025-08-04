@@ -17,7 +17,10 @@ import os
 from yolo_detection import detect_batch
 import collections
 import multiprocessing as mp
-from debug_renderer import renderer_process
+import time
+
+# from debug_renderer import renderer_process
+from debug_renderer_thread import DebugRendererThread
 
 eps = 1e-6
 
@@ -143,8 +146,9 @@ class ZZZEnv(gym.Env):
         for _ in range(config.ACTION_HISTORY_LEN):
             self.action_history.append(-1)
 
-        self.ui_pipe = None
-        self.ui_process = None
+        # self.ui_pipe = None
+        # self.ui_process = None
+        self.debug_thread = None
 
         self.ui_state = {}
 
@@ -255,9 +259,6 @@ class ZZZEnv(gym.Env):
                 if (time.time() - self.switch_timer) <= 0.65:
                     self.switch_state = 2
                     self.switch_timer = time.time()
-        elif action == 4:
-            self.q_active = True
-            self.q_timer = time.time()
 
     def step(self, action):
         """执行动作"""
@@ -336,6 +337,36 @@ class ZZZEnv(gym.Env):
         if terminate_state == 2:
             print("检测到阶段胜利，将暂停训练...")
             reward += config.VICTORY_REWARD
+            self.key_manager.release_all()
+
+            wait_start_time = time.time()
+            while time.time() - wait_start_time < 30:  # 最多等待 30s
+                time.sleep(0.5)
+
+                temp_obs = self._get_observation()
+                if temp_obs is not None:
+                    self.frame_stack.append(temp_obs)  # 保持帧栈更新
+                self._detect_all_ui_elements()
+                self.hp_boss = self._calculate_boss_hp()
+
+                if self._is_terminated() == 1:
+                    terminated = True
+                    break
+
+                if self.game_state() != "break" and self.hp_boss > 0.9:
+                    print("[Info] 检测到下阶段开始，恢复运行。")
+                    # self.recover_from_pause()
+                    # 只需更新血量和UI状态，帧栈已经是连续的了，不需要 recover_from_pause
+                    self.last_hp_boss = self.hp_boss
+                    self.last_hp_agents = np.copy(self._calculate_agents_hp())
+                    break
+
+            # 超时退出
+            if not terminated and not (
+                self.game_state() != "break" and self.hp_boss > 0.9
+            ):
+                print("[Warning] 等待Boss下一阶段超时，终止episode。")
+                terminated = True
 
         if terminated and not self.final_reward_given:
             # 胜利/败北 reward
@@ -351,7 +382,7 @@ class ZZZEnv(gym.Env):
             "consecutive_actions": self.consecutive_action_count,
             "current_action": action,
             "action_mask": self._get_action_mask(),
-            "is_stage_victory": is_stage_victory,
+            "is_stage_victory_for_gae": is_stage_victory,
         }
         # TODO:
         # truncated 是时间到了而不是结束 terminated 了，可能在有利局面下结束
@@ -370,9 +401,12 @@ class ZZZEnv(gym.Env):
             print("[Error] 恢复失败，无法获取画面。")
             return None
 
-        self.frame_stack.clear()
-        for _ in range(config.FRAME_STACK_SIZE):
+        if len(self.frame_stack) > 0:
+            self.frame_stack.pop()
             self.frame_stack.append(obs)
+        # self.frame_stack.clear()
+        # for _ in range(config.FRAME_STACK_SIZE):
+        # self.frame_stack.append(obs)
 
         current_state = self._get_current_state()
         if current_state is None:
@@ -590,7 +624,7 @@ class ZZZEnv(gym.Env):
         is_victory_condition_met = self.ui_state["is_victory"]
         is_defeat_condition_met = self._is_defeat()
 
-        if (
+        if (self.killed_confirm_frames == 0 and self.defeat_confirm_frames == 0) and (
             is_killed_condition_met
             and is_defeat_condition_met
             and not is_victory_condition_met
@@ -633,6 +667,9 @@ class ZZZEnv(gym.Env):
             print(f"失败")
             return 1
         return 0
+
+    def _is_env_safe(self):  # learn 需要一个安全的环境
+        return self.ui_state.get("is_controllable", False) and self.hp_boss > 0.1
 
     def _is_killed(self):
         no_hp_values = np.min(self.hp_agents) > eps and self.hp_boss < eps
@@ -677,6 +714,8 @@ class ZZZEnv(gym.Env):
             print("连携技完成")
             return "break"
         print("开大了")
+        self.q_active = True
+        self.q_timer = time.time()
         return "break"
 
     def _get_action_mask(self):
@@ -689,7 +728,7 @@ class ZZZEnv(gym.Env):
 
         # 开大后停 4os 让他知道是开 q 才有 reward
         if self.q_active:
-            if current_time - self.q_timer > 4.0:
+            if current_time - self.q_timer > 1.0:
                 self.q_active = False
             else:
                 mask[:] = False
@@ -785,42 +824,57 @@ class ZZZEnv(gym.Env):
 
         return reward
 
+    # def start_debug_renderer(self):
+    #     """启动独立的 ui 渲染进程。"""
+    #     if self.ui_process and self.ui_process.is_alive():
+    #         print("调试窗口已在运行。")
+    #         return
+
+    #     parent_conn, child_conn = mp.Pipe()  # 双向管道
+    #     self.ui_pipe = parent_conn
+
+    #     # 启动进程
+    #     self.ui_process = mp.Process(target=renderer_process, args=(child_conn,))
+    #     self.ui_process.start()
+    #     print("调试窗口进程已启动。")
+
+    # def update_debug_window(self, info_dict):
+    #     """通过管道向 ui 进程发送新数据。"""
+    #     if self.ui_pipe and not self.ui_pipe.closed:
+    #         try:
+    #             self.ui_pipe.send(info_dict)
+    #         except (BrokenPipeError, EOFError):
+    #             print("无法发送数据到调试窗口，管道已关闭。")
+    #             self.ui_pipe = None
+
     def start_debug_renderer(self):
-        """启动独立的 ui 渲染进程。"""
-        if self.ui_process and self.ui_process.is_alive():
-            print("调试窗口已在运行。")
+        if self.debug_thread and self.debug_thread.is_alive():
             return
-
-        parent_conn, child_conn = mp.Pipe()  # 双向管道
-        self.ui_pipe = parent_conn
-
-        # 启动进程
-        self.ui_process = mp.Process(target=renderer_process, args=(child_conn,))
-        self.ui_process.start()
-        print("调试窗口进程已启动。")
+        self.debug_thread = DebugRendererThread()
+        self.debug_thread.start()
+        print("调试线程已启动。")
 
     def update_debug_window(self, info_dict):
-        """通过管道向 ui 进程发送新数据。"""
-        if self.ui_pipe and not self.ui_pipe.closed:
-            try:
-                self.ui_pipe.send(info_dict)
-            except (BrokenPipeError, EOFError):
-                print("无法发送数据到调试窗口，管道已关闭。")
-                self.ui_pipe = None
+        if self.debug_thread:
+            self.debug_thread.update_data(info_dict)
 
     def close(self):
-        if self.ui_pipe:
-            print("正在关闭调试窗口...")
-            try:
-                self.ui_pipe.send("TERMINATE")
-                self.ui_pipe.close()
-            except (BrokenPipeError, EOFError):
-                pass  # 如果管道已经坏了，就不用管了
+        # if self.ui_pipe:
+        #     print("正在关闭调试窗口...")
+        #     try:
+        #         self.ui_pipe.send("TERMINATE")
+        #         self.ui_pipe.close()
+        #     except (BrokenPipeError, EOFError):
+        #         pass  # 如果管道已经坏了，就不用管了
 
-        if self.ui_process:
-            self.ui_process.join(timeout=2)  # 等待进程结束
-            if self.ui_process.is_alive():
-                self.ui_process.terminate()  # 如果 2s 内还没结束就强制终止
+        # if self.ui_process:
+        #     self.ui_process.join(timeout=2)  # 等待进程结束
+        #     if self.ui_process.is_alive():
+        #         self.ui_process.terminate()  # 如果 2s 内还没结束就强制终止
+
+        if self.debug_thread:
+            self.debug_thread.stop()
+            self.debug_thread.join(timeout=1)  # 等待线程结束
 
         # cv2.destroyAllWindows() # renderer_process 里头有了
         self.key_manager.release_all()

@@ -70,14 +70,13 @@ def select_target_window() -> int | None:
     return None
 
 
-def put_text_chinese(image, text, position, font_path, font_size, color):
+def put_text_chinese(image, text, position, font, color):
     """
     在OpenCV图像上绘制支持中文的文本。
     :param image: OpenCV图像 (NumPy ndarray)
     :param text: 要绘制的文本 (可以是中文)
     :param position: 文本左上角的坐标 (x, y)
-    :param font_path: ttf字体文件的路径
-    :param font_size: 字体大小
+    :param font 字体
     :param color: 文本颜色，格式为 BGR (e.g., (255, 0, 0) for blue)
     :return: 绘制了文本的OpenCV图像
     """
@@ -87,13 +86,6 @@ def put_text_chinese(image, text, position, font_path, font_size, color):
 
     # 创建一个可以在图像上绘图的对象
     draw = ImageDraw.Draw(image)
-
-    # 加载字体文件
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except IOError:
-        print(f"字体文件未找到: {font_path}，将使用默认字体。")
-        font = ImageFont.load_default()
 
     # 在指定位置绘制文本
     # 注意：Pillow的颜色格式是RGB，但我们传入的color是BGR，需要转换

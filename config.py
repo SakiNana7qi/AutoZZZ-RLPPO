@@ -5,8 +5,9 @@ IMG_WIDTH = 512  # 缩小后的图像宽度
 IMG_HEIGHT = 288  # 缩小后的图像高度
 N_ACTIONS = 7  # 动作空间大小 WASD10111213 连携上下取消789
 ACTION_HISTORY_LEN = 8  # 历史动作记录长度
-FRAME_STACK_SIZE = 4  # 帧堆叠的数量
+FRAME_STACK_SIZE = 2  # 帧堆叠的数量
 font_path = "./fonts/msyh.ttc"
+UI_UPDATE_INTERVAL = 0.05  # 每秒最多更新20次UI
 
 # --- 游戏交互配置 ---
 BATTLE_START_WAIT_TIME = 0.1  # (秒) reset后等待战斗稳定的时间
@@ -34,7 +35,7 @@ AGENT_DMG_PENALTY_SCALE = 0.1  # 代理人受到伤害的惩罚系数
 TIME_PENALTY = 0.001  # 每一步的时间惩罚
 VICTORY_REWARD = 2.0  # 胜利大奖励
 DEFEAT_PENALTY = -2.0  # 失败大惩罚
-ACTION_COST = 0.005  # 执行非空动作的成本
+ACTION_COST = 0.002  # 执行非空动作的成本
 REPETITION_THRESHOLD = 20  # 重复 x 次开始惩罚
 REPETITION_PENALTY_SCALE = 0.001  # 惩罚系数
 PERFECT_DODGE_REWARD = 0.25  # 特殊招式额外奖励 Reward Shaping
@@ -50,7 +51,7 @@ SAVE_INTERVAL = 10  # 每多少个 episode 保存一次模型
 # --- PPO 算法超参数 ---
 LEARNING_RATE = 3e-5
 GAMMA = 0.99  # γ
-GAE_LAMBDA = 0.95  # GAE 参数
+GAE_LAMBDA = 0.99  # GAE 参数
 POLICY_CLIP = 0.2  # PPO 裁剪范围
 PPO_EPOCHS = 10  # 每次更新时，对数据进行优化的轮数
 BATCH_SIZE = 64  # 每轮优化中的 batch_size
