@@ -65,7 +65,7 @@ def tracer(frame, event, arg):
     return tracer
 
 
-sys.settrace(tracer)
+# sys.settrace(tracer)
 
 
 def save_checkpoint(
@@ -81,11 +81,22 @@ def save_checkpoint(
     print(f"[Info] 正在保存 checkpoint 至 {path} ...")
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
+    memory_cpu = {}
+    for key, tensor_list in agent.memory.items():
+        if (
+            isinstance(tensor_list, list)
+            and len(tensor_list) > 0
+            and isinstance(tensor_list[0], torch.Tensor)
+        ):
+            memory_cpu[key] = [t.cpu() for t in tensor_list]
+        else:
+            memory_cpu[key] = tensor_list
+
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
-        "agent_memory": agent.memory,
+        "agent_memory": memory_cpu,
         "total_timesteps": total_timesteps,
         "episode_num": episode_num,
         "recent_rewards": recent_rewards,
@@ -107,7 +118,17 @@ def load_checkpoint(model, optimizer, scheduler, agent, path, device):
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-    agent.memory = checkpoint.get("agent_memory", agent.memory)
+    loaded_memory = checkpoint.get("agent_memory", agent.memory)
+
+    for key in loaded_memory:
+        if (
+            isinstance(loaded_memory[key], list)
+            and len(loaded_memory[key]) > 0
+            and isinstance(loaded_memory[key][0], torch.Tensor)
+        ):
+            loaded_memory[key] = [t.cpu() for t in loaded_memory[key]]
+
+    agent.memory = loaded_memory
 
     total_timesteps = checkpoint["total_timesteps"]
     episode_num = checkpoint["episode_num"]
@@ -168,7 +189,7 @@ def main():
 
     # lr 调度器
     total_updates = config.MAX_TIMESTEPS // config.UPDATE_INTERVAL
-    warmup_updates = int(total_updates * 0.1)
+    warmup_updates = int(total_updates * 0.05)
     print(f"[Info] 总更新次数: {total_updates} | Warm-up 更新次数: {warmup_updates}")
 
     warmup_scheduler = LinearLR(
@@ -356,22 +377,14 @@ def main():
 
                 scheduler.step()
 
-                # 记录损失到 TensorBoard
-                writer.add_scalar(
-                    "Info/Learning_Rate", scheduler.get_last_lr()[0], total_timesteps
-                )
-                writer.add_scalar(
-                    "Loss/Policy_Loss", loss_info["policy_loss"], total_timesteps
-                )
-                writer.add_scalar(
-                    "Loss/Value_Loss", loss_info["value_loss"], total_timesteps
-                )
-                writer.add_scalar(
-                    "Loss/Entropy", loss_info["entropy_loss"], total_timesteps
-                )
+                # 记录 learning_info 到 TensorBoard
+                for key, value in loss_info.items():
+                    writer.add_scalar(key, value, total_timesteps)
 
                 press_ESC()
                 print("[Info] 学习完成。")
+
+                time.sleep(1)
 
                 break_time = time.time()
 
@@ -434,19 +447,9 @@ def main():
 
             scheduler.step()
 
-            # 记录损失到 TensorBoard
-            writer.add_scalar(
-                "Info/Learning_Rate", scheduler.get_last_lr()[0], total_timesteps
-            )
-            writer.add_scalar(
-                "Loss/Policy_Loss", loss_info["policy_loss"], total_timesteps
-            )
-            writer.add_scalar(
-                "Loss/Value_Loss", loss_info["value_loss"], total_timesteps
-            )
-            writer.add_scalar(
-                "Loss/Entropy", loss_info["entropy_loss"], total_timesteps
-            )
+            # 记录 learning_info 到 TensorBoard
+            for key, value in loss_info.items():
+                writer.add_scalar(key, value, total_timesteps)
 
             print("[Info] 学习完成。")
             learning_requested = False
@@ -492,7 +495,7 @@ if __name__ == "__main__":
         mp.freeze_support()
         main()
     finally:
-        sys.settrace(None)
+        # sys.settrace(None)
         print("代码执行追踪结束。")
 
     # env = ZZZEnv()

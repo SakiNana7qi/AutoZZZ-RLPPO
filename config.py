@@ -5,7 +5,7 @@ IMG_WIDTH = 512  # 缩小后的图像宽度
 IMG_HEIGHT = 288  # 缩小后的图像高度
 N_ACTIONS = 7  # 动作空间大小 WASD10111213 连携上下取消789
 ACTION_HISTORY_LEN = 8  # 历史动作记录长度
-FRAME_STACK_SIZE = 2  # 帧堆叠的数量
+FRAME_STACK_SIZE = 4  # 帧堆叠的数量
 font_path = "./fonts/msyh.ttc"
 UI_UPDATE_INTERVAL = 0.05  # 每秒最多更新20次UI
 
@@ -56,7 +56,7 @@ POLICY_CLIP = 0.2  # PPO 裁剪范围
 PPO_EPOCHS = 10  # 每次更新时，对数据进行优化的轮数
 BATCH_SIZE = 64  # 每轮优化中的 batch_size
 VF_COEF = 0.5  # 价值函数损失的系数
-ENT_COEF = 0.1  # 熵奖励的系数
+ENT_COEF = 0.01  # 熵奖励的系数
 
 # --- YOLO 参数 ---
 conf_threshold = 0.45  # 置信度
