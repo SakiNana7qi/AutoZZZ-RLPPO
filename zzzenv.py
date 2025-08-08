@@ -112,7 +112,7 @@ class ZZZEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(config.IMG_HEIGHT, config.IMG_WIDTH, 3),  # [K, H, W, C] K为帧堆叠
+            shape=(config.IMG_HEIGHT, config.IMG_WIDTH, config.FRAME_STACK_SIZE),
             dtype=np.uint8,
         )
 
@@ -173,6 +173,19 @@ class ZZZEnv(gym.Env):
 
     def _get_stacked_frames(self):
         """将帧堆叠从队列变成 numpy 数组"""
+        # frames_array = np.stack(self.frame_stack, axis=0)
+        # 将 K 和 C 两个维度合并，从 [K, H, W, 3] -> [H, W, K*3]
+        # PyTorch 的 CNN (channels_first) 需要 [C*K, H, W]
+        # TensorFlow 的 CNN (channels_last) 需要 [H, W, C*K]
+        # 我们先适配 PyTorch 的习惯，在 agent 里再 permute
+        # [K, H, W, 3] -> [K, 3, H, W]
+        # frames_transposed = frames_array.transpose(0, 3, 1, 2)
+        # [K, 3, H, W] -> [K*3, H, W]
+        # stacked_frames = frames_transposed.reshape(
+        # -1, config.IMG_HEIGHT, config.IMG_WIDTH
+        # )
+        # return stacked_frames
+
         return np.stack(self.frame_stack, axis=0)
 
     def _get_current_state(self):
@@ -462,6 +475,7 @@ class ZZZEnv(gym.Env):
             # 转成灰度图
             img_gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
             return img_gray
+            # return img_resized
         except Exception as e:
             print(f"捕捉画面时发生错误: {e}")
             return None

@@ -189,7 +189,7 @@ def main():
 
     # lr 调度器
     total_updates = config.MAX_TIMESTEPS // config.UPDATE_INTERVAL
-    warmup_updates = int(total_updates * 0.05)
+    warmup_updates = 250000 // config.UPDATE_INTERVAL
     print(f"[Info] 总更新次数: {total_updates} | Warm-up 更新次数: {warmup_updates}")
 
     warmup_scheduler = LinearLR(

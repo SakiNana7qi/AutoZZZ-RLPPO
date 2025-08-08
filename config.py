@@ -38,25 +38,25 @@ DEFEAT_PENALTY = -2.0  # 失败大惩罚
 ACTION_COST = 0.002  # 执行非空动作的成本
 REPETITION_THRESHOLD = 20  # 重复 x 次开始惩罚
 REPETITION_PENALTY_SCALE = 0.001  # 惩罚系数
-PERFECT_DODGE_REWARD = 0.25  # 特殊招式额外奖励 Reward Shaping
-ASSIST_ATTACK_REWARD = 0.2
-DECIBEL_REWARD = 0.25
+PERFECT_DODGE_REWARD = 0.001  # 特殊招式额外奖励 Reward Shaping
+ASSIST_ATTACK_REWARD = 0.001
+DECIBEL_REWARD = 0.002
 
 
 # --- PPO 训练配置 ---
-MAX_TIMESTEPS = 1000000  # 总训练步数
+MAX_TIMESTEPS = 2000000  # 总训练步数
 UPDATE_INTERVAL = 1024  # 每收集多少步数据后进行一次更新
 SAVE_INTERVAL = 10  # 每多少个 episode 保存一次模型
 
 # --- PPO 算法超参数 ---
-LEARNING_RATE = 3e-5
+LEARNING_RATE = 1e-5
 GAMMA = 0.99  # γ
 GAE_LAMBDA = 0.99  # GAE 参数
 POLICY_CLIP = 0.2  # PPO 裁剪范围
 PPO_EPOCHS = 10  # 每次更新时，对数据进行优化的轮数
 BATCH_SIZE = 64  # 每轮优化中的 batch_size
 VF_COEF = 0.5  # 价值函数损失的系数
-ENT_COEF = 0.01  # 熵奖励的系数
+ENT_COEF = 0.005  # 熵奖励的系数
 
 # --- YOLO 参数 ---
 conf_threshold = 0.45  # 置信度
