@@ -171,6 +171,8 @@ class ZZZEnv(gym.Env):
 
         self.last_special_event = "none"
 
+        self.episode_len = 0
+
     def _get_stacked_frames(self):
         """将帧堆叠从队列变成 numpy 数组"""
         # frames_array = np.stack(self.frame_stack, axis=0)
@@ -245,6 +247,8 @@ class ZZZEnv(gym.Env):
         self.q_active = False
         self.q_timer = 0.0
 
+        self.episode_len = 0
+
         print(
             f"初始化完成。Boss HP: {self.hp_boss:.2f}, Agent HPs: {[f'{h:.2f}' for h in self.hp_agents]}"
         )
@@ -305,6 +309,8 @@ class ZZZEnv(gym.Env):
             # 返回当前观察值，奖励为 0 ，done 为 False，***在 info 中返回一个暂停信号***
             info = {"is_paused": True}
             return next_state, 0.0, False, False, info
+
+        self.episode_len += 1
 
         # 计算奖励
         raw_reward = self._calculate_reward()
@@ -808,13 +814,18 @@ class ZZZEnv(gym.Env):
             -scale_change(boss_hp_diff, exponent=1.5) * config.BOSS_DMG_REWARD_SCALE
         )
         agent_damage_penalty = (
-            scale_change(agents_hp_diff, exponent=2.0) * config.AGENT_DMG_PENALTY_SCALE
+            scale_change(agents_hp_diff, exponent=3.0) * config.AGENT_DMG_PENALTY_SCALE
         )
 
         reward = boss_damage_reward + agent_damage_penalty
 
         # 时间惩罚
         reward -= config.TIME_PENALTY
+
+        non_linear_penalty = (
+            config.NON_LINEAR_PENALTY_SCALE * (self.episode_len / 100) ** 2
+        )
+        reward -= non_linear_penalty
 
         current_special_event = self.ui_state["decibel"]
         special_reward = 0

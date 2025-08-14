@@ -192,6 +192,16 @@ class DebugRendererThread(threading.Thread):
                 except cv2.error as e:
                     print(f"[Error] cv2.error: {e}")
 
+            episode_reward = data_to_render.get("episode_reward", 0)
+            episode_reward_color = (0, 255, 0) if episode_reward > 0 else (0, 0, 255)
+            debug_panel = put_text_chinese(
+                debug_panel,
+                f"Episode Reward: {episode_reward:+.4f}",
+                (x_pos, line_height * 17),
+                font,
+                episode_reward_color,
+            )
+
             cv2.imshow(window_name, debug_panel)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break

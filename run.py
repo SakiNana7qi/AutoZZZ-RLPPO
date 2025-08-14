@@ -259,6 +259,7 @@ def main():
                     "hp_boss": env.hp_boss,
                     "frame_stack": list(env.frame_stack),
                     "timesteps": total_timesteps,
+                    "episode_reward": episode_reward,
                 }
                 env.update_debug_window(debug_info)
                 last_ui_update_time = current_time

@@ -33,13 +33,14 @@ ACTION_NAME = ["空", "A", "闪", "E", "Q", "切人上", "切人下"]
 BOSS_DMG_REWARD_SCALE = 0.1  # 对 boss 造成伤害的奖励系数
 AGENT_DMG_PENALTY_SCALE = 0.1  # 代理人受到伤害的惩罚系数
 TIME_PENALTY = 0.001  # 每一步的时间惩罚
+NON_LINEAR_PENALTY_SCALE = 0.00001
 VICTORY_REWARD = 2.0  # 胜利大奖励
 DEFEAT_PENALTY = -2.0  # 失败大惩罚
 ACTION_COST = 0.002  # 执行非空动作的成本
 REPETITION_THRESHOLD = 20  # 重复 x 次开始惩罚
 REPETITION_PENALTY_SCALE = 0.001  # 惩罚系数
-PERFECT_DODGE_REWARD = 0.001  # 特殊招式额外奖励 Reward Shaping
-ASSIST_ATTACK_REWARD = 0.001
+PERFECT_DODGE_REWARD = 0.025  # 特殊招式额外奖励 Reward Shaping
+ASSIST_ATTACK_REWARD = 0.025
 DECIBEL_REWARD = 0.002
 
 
